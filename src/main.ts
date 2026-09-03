@@ -8,7 +8,7 @@ export const SPIKE_VIEW = "by-ear-spike";
  * plugin is toggled off and on, so "I already fixed that" and "you are running the old build"
  * look identical from the log. Printing this makes that question answerable in one glance.
  */
-const SPIKE_BUILD = "spike-9 (a node per reading · Test D: can a playing node be re-tuned?)";
+const SPIKE_BUILD = "spike-10 (Test E: measure the dropouts, and find what stops them)";
 
 /**
  * Phase 0 spike.
@@ -78,6 +78,7 @@ class SpikeView extends ItemView {
     this.button(controls, "Test D — re-tune a node while it is playing", () =>
       this.testRescheduling()
     );
+    this.button(controls, "Test E — hunt the dropouts (needs a file)", () => this.testDropouts());
     this.button(controls, "Stop", () => this.stopAudio());
     this.button(controls, "Reset audio", () => void this.resetAudio());
     this.button(controls, "Copy report", () => this.copyReport());
@@ -331,6 +332,167 @@ class SpikeView extends ItemView {
       `${cents.toFixed(2)}), so cents do work. But the shift is ${off.toFixed(2)} cents off what ` +
       "was asked, which is worth chasing before the pitch control ships."
     );
+  }
+
+  // ---------------------------------------------------------------- test E
+
+  /**
+   * Hunts the dropouts Bas can hear, and tries to find the setting that stops them.
+   *
+   * On the iPad the audio "cuts out a bit, worst on Test C". That is the most serious thing the
+   * spike has found — a player that stutters is not usable for transcription, and unlike a 1.5 cent
+   * pitch offset it is not a number nobody can hear. But "a bit" cannot be optimised against, and
+   * asking a person to A/B four configurations by ear is both unkind and unreliable, so this
+   * measures it: play for six seconds, sample the output every 40 ms, and count the windows where
+   * the sound falls away.
+   *
+   * Two suspects, so the runs vary two things independently:
+   *
+   *   1. **How much audio the worklet is holding.** Test C hands it the whole song — 155 MB of
+   *      float samples on the iPad, likely copied across the port, so plausibly 310 MB resident.
+   *      Memory pressure means collection pauses, and a collection pause on the audio thread *is*
+   *      a dropout. If a 12 second excerpt is clean where the whole song is not, then chunked
+   *      loading stops being Phase 4 tidying and becomes Phase 1 architecture.
+   *   2. **How much work the engine does per render quantum.** `splitComputation` spreads the FFT
+   *      across quanta instead of spending it all in one, which is the library's own answer to
+   *      missing the deadline; `preset: "cheaper"` simply does less.
+   *
+   * A window counts as a dropout when its peak falls below a **twentieth of the run's own median**.
+   * Relative rather than absolute on purpose: music has quiet passages, and a fixed floor would
+   * either miss dropouts in a loud passage or invent them in a soft one.
+   */
+  private async testDropouts(): Promise<void> {
+    this.write("TEST E — hunting the dropouts. Five runs, about a minute. Listen along.");
+
+    if (!this.picked) {
+      this.write("TEST E — nothing to play. Pick a file with Test B first.");
+      new Notice("Pick a file first (Test B).");
+      return;
+    }
+
+    try {
+      const ctx = await this.stage("resuming the AudioContext", this.audioContext());
+      this.stopAudio();
+
+      const buffer = this.picked.buffer;
+      const from = Math.min(60, Math.max(0, buffer.duration - 15));
+
+      /** The whole song, or just the loop region plus a margin — the first suspect. */
+      const slice = (whole: boolean): { channels: Float32Array[]; offset: number } => {
+        if (whole) {
+          const channels: Float32Array[] = [];
+          for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
+          return { channels, offset: 0 };
+        }
+        const start = Math.floor(from * buffer.sampleRate);
+        const end = Math.min(buffer.length, Math.floor((from + 12) * buffer.sampleRate));
+        const channels: Float32Array[] = [];
+        for (let c = 0; c < buffer.numberOfChannels; c++) {
+          channels.push(buffer.getChannelData(c).slice(start, end));
+        }
+        return { channels, offset: from };
+      };
+
+      // ⚠️ `splitComputation` is only read on the branch that also sets `blockMs`
+      // (`SignalsmithStretch.mjs:203`): with no `blockMs` the library takes a preset path and the
+      // flag is silently ignored. Passing it alone would have produced a run identical to the
+      // default one, labelled as though it were a different setting — so the split run sets an
+      // explicit block size, and is honest about changing two things at once.
+      const runs: {
+        label: string;
+        whole: boolean;
+        configure?: Parameters<StretchNode["configure"]>[0];
+      }[] = [
+        { label: "whole song, default", whole: true },
+        { label: "12 s excerpt, default", whole: false },
+        { label: "whole song, preset cheaper", whole: true, configure: { preset: "cheaper" } },
+        {
+          label: "whole song, 100 ms block + split",
+          whole: true,
+          configure: { blockMs: 100, intervalMs: 25, splitComputation: true },
+        },
+        { label: "12 s excerpt, preset cheaper", whole: false, configure: { preset: "cheaper" } },
+      ];
+
+      for (const run of runs) {
+        const { channels, offset } = slice(run.whole);
+        const megabytes = (channels.length * channels[0].length * 4) / 1e6;
+
+        const node = await this.createStretch(ctx, buffer.numberOfChannels);
+        if (run.configure) node.configure(run.configure);
+        await this.stage("handing the audio to the worklet", node.addBuffers(channels), 30000);
+
+        const tap = ctx.createAnalyser();
+        tap.fftSize = 2048;
+        node.connect(tap);
+        tap.connect(ctx.destination);
+        this.tap = tap;
+        this.stretch = node;
+
+        node.schedule({
+          output: ctx.currentTime + 0.05,
+          active: true,
+          input: offset,
+          rate: 0.75,
+          semitones: -1,
+          loopStart: offset,
+          loopEnd: offset + 10,
+        });
+
+        // Let it settle before judging it: the first render quanta after a schedule are not
+        // representative of anything, and counting them as dropouts would flatter the later runs.
+        await sleep(600);
+
+        const peaks: number[] = [];
+        for (let i = 0; i < 120; i++) {
+          peaks.push(peakAmplitude(tap));
+          await sleep(40);
+        }
+
+        node.disconnect();
+        tap.disconnect();
+        this.stretch = null;
+        this.tap = null;
+
+        const sorted = [...peaks].sort((a, b) => a - b);
+        const median = sorted[Math.floor(sorted.length / 2)];
+        if (median < 0.001) {
+          this.write(`  ${run.label} (${megabytes.toFixed(0)} MB): SILENT — nothing to measure.`);
+          continue;
+        }
+
+        const floor = median / 20;
+        let quiet = 0;
+        let longestRun = 0;
+        let currentRun = 0;
+        for (const peak of peaks) {
+          if (peak < floor) {
+            quiet++;
+            currentRun++;
+            longestRun = Math.max(longestRun, currentRun);
+          } else {
+            currentRun = 0;
+          }
+        }
+
+        const percent = (100 * quiet) / peaks.length;
+        this.write(
+          `  ${run.label} (${megabytes.toFixed(0)} MB): ` +
+            `${quiet === 0 ? "✅ clean" : `⚠️ ${quiet}/${peaks.length} windows quiet (${percent.toFixed(1)}%)`}` +
+            `${longestRun > 1 ? `, worst gap ~${longestRun * 40} ms` : ""}` +
+            ` · median peak ${median.toFixed(3)}, quietest ${sorted[0].toFixed(3)}`
+        );
+      }
+
+      this.write(
+        "TEST E done. Compare the pairs, not the absolute numbers: excerpt beating whole song " +
+          "means the fix is chunked loading, and split/cheaper beating default means it is CPU. " +
+          "Both clean means what you heard is below this method's floor — say so and we measure " +
+          "differently."
+      );
+    } catch (err) {
+      this.write(`TEST E FAIL — ${describe(err)}`);
+    }
   }
 
   // ---------------------------------------------------------------- test D
