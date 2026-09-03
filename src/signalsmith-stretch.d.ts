@@ -3,6 +3,13 @@ declare module "signalsmith-stretch" {
   export interface StretchSchedule {
     /** AudioContext time at which this change takes effect. */
     output?: number;
+    /**
+     * When the library prunes and re-anchors its time map, defaulting to the *worklet's* own
+     * clock rather than the AudioContext's. Undocumented in the README but read by `schedule()`,
+     * and the two clocks are not the same one — which is worth having a name for when a
+     * re-schedule behaves differently on mobile.
+     */
+    outputTime?: number;
     /** Whether the node is processing audio. */
     active?: boolean;
     /** Position in the input buffer, in seconds. */

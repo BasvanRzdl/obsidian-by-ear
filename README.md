@@ -63,16 +63,24 @@ npm install
 Then in Obsidian: **Settings → Community plugins → refresh**, enable **By Ear**, and open
 *By Ear — spike* from the ribbon or the command palette.
 
-It measures four things, on whatever device you run it on. The fourth was not planned — it was
-found the hard way, and it cost two wrong diagnoses before it was pinned down:
+It measures five things, on whatever device you run it on. Only the first three were planned. The
+last two were found the hard way, which is rather the point of a spike:
 
 1. **Does an AudioWorklet carrying inlined WASM boot inside Obsidian's WebView?** The engine
    builds its worklet from a `blob:` URL, which a strict content-security policy could block.
+   ✅ **Answered: yes, on desktop and on iPadOS.** This was the one that could have ended the
+   project, and it doesn't.
 2. **Does `<input type="file">` reach the iOS Files picker?** On iPad that is the only route to
-   iCloud Drive, so if it fails there is no mobile story at all.
+   iCloud Drive, so if it fails there is no mobile story at all. ✅ **Answered: yes.**
 3. **Does `decodeAudioData` accept an `.mp4` directly**, or is an extracted audio sidecar
-   genuinely required for video?
-4. **Which `numberOfInputs` does this engine need?** ✅ **Answered: 1**, even though nothing is ever
+   genuinely required for video? ✅ **Answered: it takes the video container straight**, on iPadOS,
+   including a 403 s file. Note what that costs though: decoded to float samples it was **155 MB
+   resident**, so caching, not decoding, is the real mobile problem.
+4. **Can a node be re-tuned while it is playing?** Every pitch drag and tempo nudge is a
+   `schedule()` on a node already making sound. Desktop says yes. On iPadOS a second `schedule()`
+   produced silence, which would mean parameters can be set once and never changed — not a player.
+   Test D asks it directly, four ways.
+5. **Which `numberOfInputs` does this engine need?** ✅ **Answered: 1**, even though nothing is ever
    connected to that input. Obsidian agrees with the browser after all — the run that seemed to say
    otherwise was hitting the build hazard below. See the second hazard note for the mechanism. The
    spike no longer probes: a probe could only detect a *boot* failure, and zero inputs boots

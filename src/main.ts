@@ -8,7 +8,7 @@ export const SPIKE_VIEW = "by-ear-spike";
  * plugin is toggled off and on, so "I already fixed that" and "you are running the old build"
  * look identical from the log. Printing this makes that question answerable in one glance.
  */
-const SPIKE_BUILD = "spike-8 (three-way pitch attribution · no un-timed waits · mobile-ready)";
+const SPIKE_BUILD = "spike-9 (a node per reading · Test D: can a playing node be re-tuned?)";
 
 /**
  * Phase 0 spike.
@@ -52,8 +52,8 @@ class SpikeView extends ItemView {
     root.createEl("h2", { text: "By Ear — Phase 0 spike" });
     root.createEl("p", {
       text:
-        "Three fatal unknowns, measured rather than assumed. Run every test on every device, " +
-        "then copy the report.",
+        "The unknowns that are fatal if the answer is no, measured rather than assumed. Run every " +
+        "test on every device, then copy the report.",
       cls: "by-ear-muted",
     });
 
@@ -74,6 +74,9 @@ class SpikeView extends ItemView {
 
     this.button(controls, "Test C — play the picked file at 0.75× / −100 cents", () =>
       this.testPlayback()
+    );
+    this.button(controls, "Test D — re-tune a node while it is playing", () =>
+      this.testRescheduling()
     );
     this.button(controls, "Stop", () => this.stopAudio());
     this.button(controls, "Reset audio", () => void this.resetAudio());
@@ -131,8 +134,9 @@ class SpikeView extends ItemView {
   /**
    * Boots the engine and measures whether fractional semitones really behave as cents.
    *
-   * It plays one 440 Hz tone through one node and reads the output frequency twice: once
-   * unshifted, once asked for −37 cents. The answer is the *ratio* between the two.
+   * It plays one 440 Hz tone and reads the output frequency three times — with no engine at all,
+   * with the engine asked for no shift, and with the engine asked for −37 cents. Each reading gets
+   * its **own freshly booted node**, scheduled exactly once; see the note at the readings.
    *
    * ⚠️ An earlier version of this comment claimed that reading the same tone twice through the
    * same analyser cancels the FFT's own error. It does not, and the mistake produced a false
@@ -168,15 +172,6 @@ class SpikeView extends ItemView {
     this.write("TEST A — starting.");
     try {
       const ctx = await this.stage("resuming the AudioContext", this.audioContext());
-      const stretch = await this.createStretch(ctx, 1);
-      // Every remote method is a round trip over the worklet's message port, so every one of them
-      // can hang rather than fail if the processor is alive enough to answer `ready` and no more.
-      // On a device we cannot open a console on, an unexplained hang is the worst outcome there is.
-      const latency = await this.stage("asking the worklet its latency", stretch.latency(), 5000);
-      this.write(
-        "TEST A — engine booted" +
-          (Number.isFinite(latency) ? `, worklet latency ${(latency * 1000).toFixed(1)} ms` : "")
-      );
 
       const seconds = 2;
       const length = Math.floor(ctx.sampleRate * seconds);
@@ -184,7 +179,6 @@ class SpikeView extends ItemView {
       for (let i = 0; i < length; i++) {
         tone[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / ctx.sampleRate);
       }
-      await this.stage("handing the tone to the worklet", stretch.addBuffers([tone]), 10000);
 
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 32768;
@@ -247,11 +241,23 @@ class SpikeView extends ItemView {
       }
 
       // ---- 2 and 3. the same tone through the engine.
-      stretch.connect(analyser);
-      this.stretch = stretch;
-
+      //
+      // ⚠️ A *fresh node per reading*, which looks wasteful and is not. Until spike-8 both readings
+      // came from one node scheduled twice, and on the iPad the second schedule produced silence —
+      // so the reading that attributes the error is exactly the reading we lost, on the platform we
+      // most needed it from. Whether re-scheduling a live node works is a real question, but it is
+      // Test D's question, and it has no business being a hidden dependency of this one.
       const readAt = async (semitones: number): Promise<{ hz: number; spread: number }> => {
-        stretch.schedule({
+        const node = await this.createStretch(ctx, 1);
+        const latency = await this.stage("asking the worklet its latency", node.latency(), 5000);
+        if (Number.isFinite(latency)) {
+          this.write(`… engine booted, worklet latency ${(latency * 1000).toFixed(1)} ms`);
+        }
+        await this.stage("handing the tone to the worklet", node.addBuffers([tone]), 10000);
+
+        node.connect(analyser);
+        this.stretch = node;
+        node.schedule({
           output: ctx.currentTime + 0.05,
           active: true,
           input: 0,
@@ -261,24 +267,20 @@ class SpikeView extends ItemView {
           loopEnd: seconds,
         });
         await sleep(900);
-        return read();
+
+        const result = await read();
+        node.disconnect();
+        return result;
       };
 
-      // Shifted still runs first: that ordering is the one verified working, and re-scheduling a
-      // live node is only proven on desktop. If the second read comes back silent we still have
-      // an absolute measurement to fall back on, so an iPad quirk cannot masquerade as a fault.
-      const shifted = await readAt(-0.37);
-      if (!Number.isFinite(shifted.hz)) {
+      const rest = await readAt(0);
+      if (!Number.isFinite(rest.hz)) {
         this.write("TEST A FAIL — the node produced silence. The worklet is not processing.");
         return;
       }
-      const rest = await readAt(0);
-
-      if (!Number.isFinite(rest.hz)) {
-        const expected = 440 * Math.pow(2, -0.37 / 12);
-        this.write(describeRead("engine at −37 cents", shifted, expected));
-        this.write("(the 0-semitone read came back silent — re-scheduling a live node)");
-        this.write(this.pitchVerdict(1200 * Math.log2(shifted.hz / 440)));
+      const shifted = await readAt(-0.37);
+      if (!Number.isFinite(shifted.hz)) {
+        this.write("TEST A FAIL — the node went silent when asked for a fractional shift.");
         return;
       }
 
@@ -329,6 +331,130 @@ class SpikeView extends ItemView {
       `${cents.toFixed(2)}), so cents do work. But the shift is ${off.toFixed(2)} cents off what ` +
       "was asked, which is worth chasing before the pitch control ships."
     );
+  }
+
+  // ---------------------------------------------------------------- test D
+
+  /**
+   * Can the engine be re-tuned **while it is playing**? Phase 1's entire interface depends on yes.
+   *
+   * Dragging a pitch slider, nudging the tempo, moving the A or B marker — every one of those is a
+   * `schedule()` call on a node that is already making sound. On the Mac that has always worked. On
+   * the iPad, spike-8's Test A scheduled one node twice and **the second schedule produced silence**,
+   * which is a far bigger finding than the pitch error it was chasing: it would mean the player can
+   * set its parameters once and never change them, which is not a player.
+   *
+   * So this test does the one thing that matters and does it four ways, each on its own fresh node,
+   * because a node that has already gone silent cannot answer the next question. Each attempt plays
+   * at 0 semitones, is checked for output, is then asked to drop an octave, and is checked again.
+   * An octave rather than a few cents on purpose — 220 Hz against 440 Hz needs no interpretation.
+   *
+   * The variants exist because the library's `schedule()` distinguishes `output` (when the new
+   * segment takes effect, on the AudioContext clock) from `outputTime` (the moment it prunes and
+   * re-anchors the time map, defaulting to the *worklet's* own clock). Those are two different
+   * clocks, and the gap between them is exactly the kind of thing that behaves differently under a
+   * mobile WebView's larger buffers.
+   */
+  private async testRescheduling(): Promise<void> {
+    this.write("TEST D — can a playing node be re-tuned? Four ways, fresh node each time.");
+    try {
+      const ctx = await this.stage("resuming the AudioContext", this.audioContext());
+
+      const seconds = 2;
+      const length = Math.floor(ctx.sampleRate * seconds);
+      const tone = new Float32Array(length);
+      for (let i = 0; i < length; i++) {
+        tone[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / ctx.sampleRate);
+      }
+
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 32768;
+      analyser.smoothingTimeConstant = 0;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.15;
+      analyser.connect(gain);
+      gain.connect(ctx.destination);
+
+      const base = {
+        active: true,
+        input: 0,
+        rate: 1,
+        loopStart: 0,
+        loopEnd: seconds,
+      };
+
+      const variants: { label: string; retune: (node: StretchNode) => void }[] = [
+        {
+          label: "schedule() 50 ms ahead",
+          retune: (node) =>
+            node.schedule({ ...base, output: ctx.currentTime + 0.05, semitones: -12 }),
+        },
+        {
+          label: "schedule() 300 ms ahead",
+          retune: (node) =>
+            node.schedule({ ...base, output: ctx.currentTime + 0.3, semitones: -12 }),
+        },
+        {
+          label: "schedule() with an explicit outputTime",
+          retune: (node) =>
+            node.schedule({
+              ...base,
+              output: ctx.currentTime + 0.05,
+              outputTime: ctx.currentTime,
+              semitones: -12,
+            }),
+        },
+        {
+          label: "stop() then start()",
+          retune: (node) => {
+            node.stop(ctx.currentTime);
+            node.start(ctx.currentTime + 0.05);
+            node.schedule({ ...base, output: ctx.currentTime + 0.06, semitones: -12 });
+          },
+        },
+      ];
+
+      for (const variant of variants) {
+        const node = await this.createStretch(ctx, 1);
+        await this.stage("handing the tone to the worklet", node.addBuffers([tone]), 10000);
+        node.connect(analyser);
+        this.stretch = node;
+
+        node.schedule({ ...base, output: ctx.currentTime + 0.05, semitones: 0 });
+        await sleep(800);
+        const before = toneFrequency(analyser, ctx.sampleRate);
+
+        if (!Number.isFinite(before)) {
+          this.write(`  ${variant.label}: SKIPPED — the first schedule never played.`);
+          node.disconnect();
+          continue;
+        }
+
+        variant.retune(node);
+        await sleep(800);
+        const after = toneFrequency(analyser, ctx.sampleRate);
+        node.disconnect();
+
+        if (!Number.isFinite(after)) {
+          this.write(`  ${variant.label}: ❌ SILENT after re-tuning (was ${before.toFixed(1)} Hz).`);
+          continue;
+        }
+        const moved = 1200 * Math.log2(after / before);
+        this.write(
+          `  ${variant.label}: ${Math.abs(moved + 1200) < 25 ? "✅" : "⚠️"} ` +
+            `${before.toFixed(1)} → ${after.toFixed(1)} Hz (${offsetCents(after, before)}, ` +
+            "asked for −1200)"
+        );
+      }
+
+      this.write(
+        "TEST D done. A ✅ on any line is enough — that is the way the player will re-tune. " +
+          "All four silent means parameters can only be set at schedule time, and Phase 1 needs a " +
+          "different design (a new node per change, crossfaded)."
+      );
+    } catch (err) {
+      this.write(`TEST D FAIL — ${describe(err)}`);
+    }
   }
 
   // ---------------------------------------------------------------- test B
