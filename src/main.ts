@@ -8,7 +8,7 @@ export const SPIKE_VIEW = "by-ear-spike";
  * plugin is toggled off and on, so "I already fixed that" and "you are running the old build"
  * look identical from the log. Printing this makes that question answerable in one glance.
  */
-const SPIKE_BUILD = "spike-13 (Test G: measure the grain, not the gaps)";
+const SPIKE_BUILD = "spike-14 (Tests H + I: separate the block from the interval, then listen)";
 
 /**
  * Phase 0 spike.
@@ -100,6 +100,12 @@ class SpikeView extends ItemView {
     );
     this.button(controls, "Test G — is it the slowdown? (tone, no file needed)", () =>
       this.run("Test G", () => this.testPurity())
+    );
+    this.button(controls, "Test H — block or interval? (tone, no file needed, 20 s)", () =>
+      this.run("Test H", () => this.testBlockLadder())
+    );
+    this.button(controls, "Test I — listen to A/B: default vs bigger block (needs a file, 45 s)", () =>
+      this.run("Test I", () => this.testListenBlock())
     );
     this.button(controls, "Stop", () => this.stopAudio());
     this.button(controls, "Reset audio", () => void this.resetAudio());
@@ -513,6 +519,329 @@ class SpikeView extends ItemView {
       );
     } catch (err) {
       this.write(`TEST G FAIL — ${describe(err)}`);
+    }
+  }
+
+  // ---------------------------------------------------------------- test H
+
+  /**
+   * Test G found the fix. This test finds out **what the fix actually was**.
+   *
+   * On both machines, one row of Test G's ladder fell all the way back to the bypass floor —
+   * `{ blockMs: 200, intervalMs: 25 }` read 0.00% where Test C's own settings read 0.45% on the
+   * iPad and 0.27% on the Mac. It repaired the pitch at the same time: −1 semitone should land on
+   * 415.30 Hz, the default block read 416.3–416.5 (four to five cents sharp), and the 200 ms row
+   * read 415.4–415.7. One misconfiguration was producing both symptoms.
+   *
+   * ⚠️ But that row moved **two** things at once. The library's default interval is
+   * `blockMs * 0.25` (`SignalsmithStretch.mjs:206`), so going to a 200 ms block with a 25 ms
+   * interval doubled the block *and* tripled the overlap, and either one alone could be doing all
+   * of the work. Believing "a bigger block fixed it" on that evidence would be exactly the mistake
+   * this spike has already made four times — reading a number and skipping the difference that
+   * produced it.
+   *
+   * There is a third confound underneath, easy to miss: setting `blockMs` at all takes a **different
+   * branch of the library**. With a block set it calls `_configure(channels, blockSamples,
+   * intervalSamples, splitComputation)`; with none it calls `_presetDefault(channels, sampleRate)`,
+   * which is free to choose more than a block length. So "block 120 · interval 30" is here as a
+   * row of its own — it is the default said out loud, and if it does not match the preset then the
+   * preset path is doing something extra and every comparison below has to be made against *it*
+   * rather than against the preset.
+   *
+   * Hence one variable per step, at Test C's own rate and shift:
+   *
+   *   1. **default preset** — the control.
+   *   2. **block 120 · interval 30** — the same numbers, via the explicit branch.
+   *   3. **block 120 · interval 25** — against row 2, the **interval** alone.
+   *   4. **block 200 · interval 50** — against row 2, the **block** alone (same 25% ratio).
+   *   5. **block 200 · interval 25** — Test G's winner, repeated.
+   *   6. **block 300 · interval 25** — does more keep helping, or has it flattened out?
+   *   7. **default preset again** — the control run, Test E's lesson: if row 7 does not match row 1
+   *      the runs are not independent and none of the differences above mean anything.
+   *
+   * Every row also reports its **latency**, because that is the price. A block is an analysis
+   * window, so a bigger one is more delay between asking for a change and hearing it — 120 ms today,
+   * and whatever wins here is what Phase 1's A/B drag and tempo nudge will feel like under the
+   * finger. A row that is clean and unusable is still a finding, just not the one we want.
+   *
+   * ⚠️ **A steady sine is the best case a long block can ever get.** Stretching works by assuming
+   * the sound holds still for the length of the window, which a 440 Hz tone does perfectly and a
+   * snare drum does not at all. The cost of a bigger block is smeared transients, and no tone can
+   * show it. That is Test I's job, and this test is not finished until Test I has run.
+   */
+  private async testBlockLadder(): Promise<void> {
+    this.write("TEST H — block or interval? One variable at a time, on the tone.");
+
+    try {
+      const ctx = await this.stage("resuming the AudioContext", this.audioContext());
+      this.stopAudio();
+
+      // Test C's own settings, held fixed all the way down the ladder — the only thing moving is
+      // the configuration.
+      const rate = 0.75;
+      const semitones = -1;
+      const target = 440 * Math.pow(2, semitones / 12);
+
+      const seconds = 2;
+      const length = Math.floor(ctx.sampleRate * seconds);
+      const tone = new Float32Array(length);
+      for (let i = 0; i < length; i++) {
+        tone[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / ctx.sampleRate);
+      }
+
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 32768;
+      analyser.smoothingTimeConstant = 0;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.15;
+      analyser.connect(gain);
+      gain.connect(ctx.destination);
+
+      const measure = async (): Promise<{ hz: number; junk: number }> => {
+        const reads: { hz: number; junk: number }[] = [];
+        for (let i = 0; i < 3; i++) {
+          const reading = tonePurity(analyser, ctx.sampleRate);
+          if (Number.isFinite(reading.junk)) reads.push(reading);
+          if (i < 2) await sleep(200);
+        }
+        if (reads.length === 0) return { hz: NaN, junk: NaN };
+        reads.sort((a, b) => a.junk - b.junk);
+        return reads[Math.floor(reads.length / 2)];
+      };
+
+      // ---- the floor again, measured fresh. It is cheap, and a number carried over from another
+      // test on another day would be the one unverified thing everything else is divided by.
+      const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+      buffer.copyToChannel(tone, 0);
+      const bypass = ctx.createBufferSource();
+      bypass.buffer = buffer;
+      bypass.loop = true;
+      bypass.connect(analyser);
+      bypass.start();
+      await sleep(900);
+      const floor = await measure();
+      bypass.stop();
+      bypass.disconnect();
+
+      if (!Number.isFinite(floor.junk)) {
+        this.write("TEST H FAIL — the bypass tone read as silence. Nothing below would mean anything.");
+        return;
+      }
+      this.write(
+        `  bypass, no engine: ${floor.junk.toFixed(3)}% not-the-note ← this is the floor`
+      );
+
+      const settings: {
+        label: string;
+        configure?: Parameters<StretchNode["configure"]>[0];
+      }[] = [
+        { label: "1. default preset ← the control    " },
+        {
+          label: "2. block 120 · interval 30 (default, said out loud)",
+          configure: { blockMs: 120, intervalMs: 30 },
+        },
+        {
+          label: "3. block 120 · interval 25 ← the interval alone",
+          configure: { blockMs: 120, intervalMs: 25 },
+        },
+        {
+          label: "4. block 200 · interval 50 ← the block alone   ",
+          configure: { blockMs: 200, intervalMs: 50 },
+        },
+        {
+          label: "5. block 200 · interval 25 ← Test G's winner   ",
+          configure: { blockMs: 200, intervalMs: 25 },
+        },
+        {
+          label: "6. block 300 · interval 25 ← more of the same? ",
+          configure: { blockMs: 300, intervalMs: 25 },
+        },
+        { label: "7. default preset (repeat — the control)" },
+      ];
+
+      for (const setting of settings) {
+        const node = await this.createStretch(ctx, 1);
+        // ⚠️ `configure()` before `latency()`. The block length *is* the latency, so asking first
+        // would report the default for every row and quietly hide the entire price of the fix.
+        if (setting.configure) node.configure(setting.configure);
+
+        let latency = NaN;
+        try {
+          latency = await this.stage("asking the worklet its latency", node.latency(), 5000);
+        } catch {
+          /* a missing price is worth less than a missing measurement — carry on */
+        }
+
+        await this.stage("handing the tone to the worklet", node.addBuffers([tone]), 10000);
+
+        node.connect(analyser);
+        this.stretch = node;
+        node.schedule({
+          output: ctx.currentTime + 0.05,
+          active: true,
+          input: 0,
+          rate,
+          semitones,
+          loopStart: 0,
+          loopEnd: seconds,
+        });
+
+        await sleep(900);
+        const reading = await measure();
+
+        try {
+          await this.stage("releasing the worklet's audio", node.dropBuffers(), 10000);
+        } catch {
+          /* the measurement is already taken */
+        }
+        node.disconnect();
+        this.stretch = null;
+
+        if (!Number.isFinite(reading.junk)) {
+          this.write(`  ${setting.label}: SILENT — nothing to measure.`);
+          continue;
+        }
+        const times = floor.junk > 0 ? `${(reading.junk / floor.junk).toFixed(0)}× floor` : "floor is 0";
+        const price = Number.isFinite(latency) ? `${(latency * 1000).toFixed(0)} ms latency` : "latency unknown";
+        this.write(
+          `  ${setting.label}: ${reading.junk.toFixed(3)}% not-the-note (${times}) · ` +
+            `${price} · pitch ${offsetCents(reading.hz, target)}`
+        );
+      }
+
+      this.write(
+        "TEST H done. Read row 7 against row 1 first — if the control drifted, the runs interfered " +
+          "and nothing below it means anything. Then read in pairs: 3 against 2 is the interval on " +
+          "its own, 4 against 2 is the block on its own, and if 2 does not match 1 then the preset " +
+          "path does more than set a block and every comparison belongs against 2. If 6 is no better " +
+          "than 5 the curve has flattened and 200 ms is the setting. The latency column is what the " +
+          "fix costs under the finger in Phase 1. ⚠️ A steady tone is the friendliest thing a long " +
+          "block will ever be handed — run Test I before believing any of this."
+      );
+    } catch (err) {
+      this.write(`TEST H FAIL — ${describe(err)}`);
+    }
+  }
+
+  // ---------------------------------------------------------------- test I
+
+  /**
+   * The ear check, because the tone cannot do it.
+   *
+   * Everything Tests G and H measure is a pure 440 Hz sine, which is the one signal a phase vocoder
+   * finds easy: it holds still for the whole analysis window, so a longer window is pure profit and
+   * the number can only improve. Real music is the opposite case — a struck string, a snare, a
+   * consonant — and there the window length is a **trade**: too short and the engine adds the grain
+   * Test G measured, too long and transients smear across the window and the attack goes soft and
+   * flangey. A tone can show the first failure and is structurally incapable of showing the second.
+   *
+   * So this plays the same passage twice, back to back, on the real file: once on the default
+   * preset, once at whatever Test H settled on. Same music, same loop, same rate and shift as
+   * Test C — the test where Bas can plainly hear the fault — and long enough each time to cross a
+   * loop wrap, which at 0.75× arrives 13.3 seconds into each half.
+   *
+   * There is no verdict line at the end and no measurement in the middle, deliberately. Four
+   * instruments this evening have reported clean while he could hear the fault, and the one
+   * detector that has been right every time is the one this test is built around. The only question
+   * it asks is: **is the second half quieter in its grain, and did the attacks survive it?**
+   */
+  private async testListenBlock(): Promise<void> {
+    this.write("TEST I — the same passage twice: default block, then the bigger one. Listen.");
+
+    if (!this.picked) {
+      this.write(
+        this.decoding
+          ? "TEST I — the file is still decoding. Wait for the 'decoded in …' line, then try again."
+          : "TEST I — nothing to play. Pick a file with Test B first."
+      );
+      new Notice(this.decoding ? "Still decoding — wait a moment." : "Pick a file first (Test B).");
+      return;
+    }
+
+    try {
+      const ctx = await this.stage("resuming the AudioContext", this.audioContext());
+      this.stopAudio();
+
+      const buffer = this.picked.buffer;
+      const channels: Float32Array[] = [];
+      for (let c = 0; c < buffer.numberOfChannels; c++) {
+        channels.push(buffer.getChannelData(c));
+      }
+      const from = Math.min(60, Math.max(0, buffer.duration - 15));
+
+      const half = async (
+        label: string,
+        configure?: Parameters<StretchNode["configure"]>[0]
+      ): Promise<void> => {
+        const stretch = await this.createStretch(ctx, buffer.numberOfChannels);
+        if (configure) stretch.configure(configure);
+
+        let latency = NaN;
+        try {
+          latency = await this.stage("asking the worklet its latency", stretch.latency(), 5000);
+        } catch {
+          /* not worth abandoning a listening test over */
+        }
+
+        await this.stage("handing the audio to the worklet", stretch.addBuffers(channels), 30000);
+
+        const tap = ctx.createAnalyser();
+        tap.fftSize = 2048;
+        stretch.connect(tap);
+        tap.connect(ctx.destination);
+        this.tap = tap;
+        this.stretch = stretch;
+
+        stretch.schedule({
+          output: ctx.currentTime + 0.05,
+          active: true,
+          input: from,
+          rate: 0.75,
+          semitones: -1,
+          loopStart: from,
+          loopEnd: from + 10,
+        });
+
+        this.write(
+          `  ▶ ${label} — ${Number.isFinite(latency) ? `${(latency * 1000).toFixed(0)} ms latency` : "latency unknown"}` +
+            ` · 20 seconds, wrapping once at 13.3 s.`
+        );
+
+        // Still measured, even though the ear is the instrument here: "I heard nothing" and "it
+        // played nothing" are the same experience and opposite findings, and spike-5 logged
+        // "playing" over pure silence.
+        await sleep(1400);
+        const peak = peakAmplitude(tap);
+        if (peak < 0.001) {
+          this.write(`  ⚠️ ${label} is SILENT (peak ${peak.toFixed(5)}) — there is nothing to judge.`);
+        }
+
+        await sleep(18600);
+
+        try {
+          await this.stage("releasing the worklet's audio", stretch.dropBuffers(), 10000);
+        } catch {
+          /* the listening is done */
+        }
+        stretch.disconnect();
+        tap.disconnect();
+        this.stretch = null;
+        this.tap = null;
+      };
+
+      await half("A — default preset (this is Test C)");
+      this.write("  … switching. A second of quiet, then the same music again.");
+      await sleep(1000);
+      await half("B — block 200 · interval 25", { blockMs: 200, intervalMs: 25 });
+
+      this.write(
+        "TEST I done. Two questions, and only your ear can answer either: was B's grain quieter " +
+          "than A's, and did B's attacks — pick, snare, consonant — stay sharp or go soft and " +
+          "watery? A cleaner B with soft attacks is not a win; it is a different setting to find. " +
+          "If B is cleaner and the attacks held, that is the fix, and Phase 1 ships with it."
+      );
+    } catch (err) {
+      this.write(`TEST I FAIL — ${describe(err)}`);
     }
   }
 
