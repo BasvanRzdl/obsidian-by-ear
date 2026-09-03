@@ -8,7 +8,7 @@ export const SPIKE_VIEW = "by-ear-spike";
  * plugin is toggled off and on, so "I already fixed that" and "you are running the old build"
  * look identical from the log. Printing this makes that question answerable in one glance.
  */
-const SPIKE_BUILD = "spike-6 (numberOfInputs: 1, output measured not assumed)";
+const SPIKE_BUILD = "spike-7 (pitch measured against the DFT, not the bin grid)";
 
 /**
  * Phase 0 spike.
@@ -132,13 +132,37 @@ class SpikeView extends ItemView {
    * Boots the engine and measures whether fractional semitones really behave as cents.
    *
    * It plays one 440 Hz tone through one node and reads the output frequency twice: once
-   * unshifted, once asked for −37 cents. The answer is the *ratio* between the two, not
-   * either absolute reading.
+   * unshifted, once asked for −37 cents. The answer is the *ratio* between the two.
    *
-   * That matters. A single absolute reading can't separate an engine error from the FFT's
-   * own resolution — at 32768 bins and 44.1 kHz a bin is 1.35 Hz, which is about 4 cents at
-   * this pitch, so an honest engine still looks a few cents off. Measuring the same tone
-   * twice through the same analyser cancels that bias and leaves only the engine.
+   * ⚠️ An earlier version of this comment claimed that reading the same tone twice through the
+   * same analyser cancels the FFT's own error. It does not, and the mistake produced a false
+   * accusation against the engine on 3 September 2026. Bin quantisation and interpolation error
+   * depend on where a tone happens to fall between two bins, so they differ between two reads at
+   * two different pitches — they are not a constant bias, and a difference cancels nothing. The
+   * two reads that day were 1.6 and 4.3 cents high, and the 2.7 cent gap between those errors was
+   * reported as a 2.7 cent engine fault.
+   *
+   * ⚠️ And then the obvious follow-up theory was wrong too. Simulating that day's readings offline
+   * showed the old bin-and-parabola ruler is good to **0.02 cents** on a clean tone, and that the
+   * analyser's default 0.8 smoothing does not move the peak either (the first read has no history
+   * to smooth against, so it only ever contributed 0.16 weight to the second). Neither suspect can
+   * produce 4 cents. So the error is not in the arithmetic — it is in the *signal*, which means the
+   * engine's output is not the clean stationary tone we assumed.
+   *
+   * Hence the shape of this test. It takes **three** readings, and each comparison isolates one
+   * thing:
+   *
+   *   1. **bypass** — the tone straight from an AudioBufferSourceNode to the analyser, no engine
+   *      in the path. This measures our own tone with our own ruler, and it should read 440.000.
+   *      If it doesn't, nothing below means anything and the instrument is the story after all.
+   *   2. **engine at 0 semitones** — the same tone through the stretcher, asked for no shift. Any
+   *      gap between this and the bypass is the engine, provably, with the ruler ruled out.
+   *   3. **engine at −37 cents** — measured against reading 2, so whatever the engine does at rest
+   *      cancels and what is left is the shift.
+   *
+   * Each reading is the median of three, and the spread across those three is reported: a stable
+   * number means a steady tone that is genuinely off, a wandering one means resynthesis that never
+   * settles. Those are different bugs.
    */
   private async testEngine(): Promise<void> {
     this.write("TEST A — starting.");
@@ -161,15 +185,69 @@ class SpikeView extends ItemView {
 
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 32768;
+      // ⚠️ Load-bearing. The default is 0.8, and the spec smooths each spectrum against the
+      // *previous* getFloatFrequencyData call — which here is the other pitch, a second earlier.
+      // Cross-contaminating the two reads is the last thing this test wants.
+      analyser.smoothingTimeConstant = 0;
       const gain = ctx.createGain();
       gain.gain.value = 0.15;
 
-      stretch.connect(analyser);
       analyser.connect(gain);
       gain.connect(ctx.destination);
+
+      /** Median of three reads a fifth of a second apart, plus how far apart they were. */
+      const read = async (): Promise<{ hz: number; spread: number }> => {
+        const reads: number[] = [];
+        for (let i = 0; i < 3; i++) {
+          const hz = toneFrequency(analyser, ctx.sampleRate);
+          if (Number.isFinite(hz)) reads.push(hz);
+          if (i < 2) await sleep(200);
+        }
+        if (reads.length === 0) return { hz: NaN, spread: NaN };
+        reads.sort((a, b) => a - b);
+        return {
+          hz: reads[Math.floor(reads.length / 2)],
+          spread: 1200 * Math.log2(reads[reads.length - 1] / reads[0]),
+        };
+      };
+
+      const describeRead = (label: string, r: { hz: number; spread: number }, against: number) =>
+        `${label}: ${r.hz.toFixed(3)} Hz · ${offsetCents(r.hz, against)} · ` +
+        `spread ${r.spread.toFixed(2)} cents across 3 reads`;
+
+      // ---- 1. the ruler, with no engine in the path at all.
+      const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+      buffer.copyToChannel(tone, 0);
+      const bypass = ctx.createBufferSource();
+      bypass.buffer = buffer;
+      bypass.loop = true;
+      bypass.connect(analyser);
+      bypass.start();
+      await sleep(900);
+      const clean = await read();
+      bypass.stop();
+      bypass.disconnect();
+
+      if (!Number.isFinite(clean.hz)) {
+        this.write("TEST A FAIL — even the bypass tone read as silence. The analyser tap is wrong.");
+        return;
+      }
+      this.write(describeRead("ruler check (no engine)", clean, 440));
+
+      const rulerError = 1200 * Math.log2(clean.hz / 440);
+      if (Math.abs(rulerError) > 0.5) {
+        this.write(
+          "⚠️ TEST A ABORTED — the ruler cannot find a tone we generated ourselves. Everything " +
+            "below would be measuring the instrument, so it is not worth printing."
+        );
+        return;
+      }
+
+      // ---- 2 and 3. the same tone through the engine.
+      stretch.connect(analyser);
       this.stretch = stretch;
 
-      const readAt = async (semitones: number): Promise<number> => {
+      const readAt = async (semitones: number): Promise<{ hz: number; spread: number }> => {
         stretch.schedule({
           output: ctx.currentTime + 0.05,
           active: true,
@@ -180,49 +258,74 @@ class SpikeView extends ItemView {
           loopEnd: seconds,
         });
         await sleep(900);
-        return peakFrequency(analyser, ctx.sampleRate);
+        return read();
       };
 
-      // The shifted read comes first, because that ordering is the one verified working in a
-      // browser harness. The unshifted read is a refinement, and re-scheduling a live node is
-      // not yet proven, so the verdict degrades to the absolute measurement if it comes back
-      // silent. A quirk in the second schedule must not masquerade as a broken engine.
+      // Shifted still runs first: that ordering is the one verified working, and re-scheduling a
+      // live node is only proven on desktop. If the second read comes back silent we still have
+      // an absolute measurement to fall back on, so an iPad quirk cannot masquerade as a fault.
       const shifted = await readAt(-0.37);
-      if (!Number.isFinite(shifted)) {
+      if (!Number.isFinite(shifted.hz)) {
         this.write("TEST A FAIL — the node produced silence. The worklet is not processing.");
         return;
       }
+      const rest = await readAt(0);
 
-      const reference = await readAt(0);
-      if (Number.isFinite(reference)) {
-        const cents = 1200 * Math.log2(shifted / reference);
-        this.write(
-          `reference ${reference.toFixed(2)} Hz · shifted ${shifted.toFixed(2)} Hz · ` +
-            `delta ${cents.toFixed(2)} cents (asked for −37.00)`
-        );
-        this.write(
-          Math.abs(cents + 37) < 2
-            ? "TEST A PASS — worklet runs and fractional semitones behave as cents."
-            : "TEST A SUSPECT — audible, but the pitch shift is off. Don't trust cents yet."
-        );
+      if (!Number.isFinite(rest.hz)) {
+        const expected = 440 * Math.pow(2, -0.37 / 12);
+        this.write(describeRead("engine at −37 cents", shifted, expected));
+        this.write("(the 0-semitone read came back silent — re-scheduling a live node)");
+        this.write(this.pitchVerdict(1200 * Math.log2(shifted.hz / 440)));
         return;
       }
 
-      const expected = 440 * Math.pow(2, -0.37 / 12);
-      const errorCents = 1200 * Math.log2(shifted / expected);
-      this.write(
-        `measured ${shifted.toFixed(2)} Hz · expected ${expected.toFixed(2)} Hz · ` +
-          `error ${errorCents.toFixed(1)} cents`
-      );
-      this.write("(the unshifted reference read came back silent — re-scheduling a live node)");
-      this.write(
-        Math.abs(errorCents) < 8
-          ? "TEST A PASS — worklet runs and the shift is right to within FFT resolution."
-          : "TEST A SUSPECT — audible, but the pitch shift is off. Don't trust cents yet."
-      );
+      this.write(describeRead("engine at 0 semitones", rest, clean.hz));
+      this.write(describeRead("engine at −37 cents", shifted, rest.hz));
+
+      const atRest = 1200 * Math.log2(rest.hz / clean.hz);
+      if (Math.abs(atRest) > 1) {
+        this.write(
+          `⚠️ the engine moves the pitch by ${atRest.toFixed(2)} cents when asked for no shift ` +
+            "at all. The ruler is clean on the bypass, so that is the engine — and it is the " +
+            "number to chase, not the shift below."
+        );
+      }
+
+      this.write(this.pitchVerdict(1200 * Math.log2(shifted.hz / rest.hz)));
     } catch (err) {
       this.write(`TEST A FAIL — ${describe(err)}`);
     }
+  }
+
+  /**
+   * Two questions live in this one number, and only the first is fatal.
+   *
+   * **Does the engine round fractional semitones to whole ones?** If it does, the pitch control
+   * this whole plugin is built around cannot exist, and we would need a different engine. An
+   * engine that rounds lands on 0 or −100 cents; nothing else does.
+   *
+   * **Is the shift accurate?** Merely nice. Nobody hears two cents, and a tuning error that size
+   * would be a bug report against Signalsmith, not a reason to abandon the approach. So it is
+   * reported honestly and separately, and it never says FAIL.
+   */
+  private pitchVerdict(cents: number): string {
+    const asked = -37;
+    const off = cents - asked;
+
+    if (Math.abs(off) < 2) {
+      return "TEST A PASS — worklet runs and fractional semitones behave as cents.";
+    }
+    if (Math.abs(cents) < 5 || Math.abs(cents + 100) < 5) {
+      return (
+        `TEST A FAIL — asked for ${asked} cents and got ${cents.toFixed(2)}: the engine is ` +
+        "rounding fractional semitones to whole ones. The pitch control needs another engine."
+      );
+    }
+    return (
+      `TEST A SUSPECT — no rounding (a rounding engine would read 0 or −100, not ` +
+      `${cents.toFixed(2)}), so cents do work. But the shift is ${off.toFixed(2)} cents off what ` +
+      "was asked, which is worth chasing before the pitch control ships."
+    );
   }
 
   // ---------------------------------------------------------------- test B
@@ -536,7 +639,57 @@ class SpikeView extends ItemView {
 }
 
 /** Quadratic interpolation around the loudest bin, for sub-bin frequency accuracy. */
-function peakFrequency(analyser: AnalyserNode, sampleRate: number): number {
+/**
+ * Frequency of the strongest partial, to a small fraction of a cent. NaN if there is no signal.
+ *
+ * ⚠️ **This is not the fix for the 3 September mismeasurement, and it is worth being clear about
+ * that, because it looks like it should be.** The previous ruler took the loudest of the
+ * analyser's bins and interpolated a parabola through its neighbours. Bins are 1.35 Hz apart here
+ * — about 5 cents at this pitch — so that method *looks* far too coarse to answer a question posed
+ * in cents. It isn't: simulated against the exact tones Test A plays, it came back accurate to
+ * **0.02 cents**, because log-magnitude parabolic interpolation on a Blackman-windowed spectrum is
+ * very nearly exact for a clean sine. The 4 cents we actually saw cannot be blamed on it.
+ *
+ * So this exists for a different reason: it removes the bin grid from the argument entirely. It
+ * uses the bins only to find the neighbourhood, then evaluates the DFT directly at arbitrary
+ * frequencies inside it and hunts the true maximum by ternary search — converging to 0.0001 Hz,
+ * under a thousandth of a cent. Where it genuinely earns its place is on the signal we are *not*
+ * sure about: parabolic interpolation assumes one clean symmetric peak, and phase-vocoder output
+ * with harmonics or a wandering partial is exactly where that assumption quietly stops holding.
+ */
+function toneFrequency(analyser: AnalyserNode, sampleRate: number): number {
+  const samples = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(samples);
+
+  let loudest = 0;
+  for (const sample of samples) loudest = Math.max(loudest, Math.abs(sample));
+  if (loudest < 1e-3) return NaN;
+
+  // Hann window. Without one, the tone's leakage skirts run the length of the spectrum and the
+  // magnitude curve we are about to search is not smooth enough to trust a maximum on.
+  const windowed = new Float32Array(samples.length);
+  for (let i = 0; i < samples.length; i++) {
+    windowed[i] = samples[i] * 0.5 * (1 - Math.cos((2 * Math.PI * i) / (samples.length - 1)));
+  }
+
+  const coarse = loudestBin(analyser, sampleRate);
+  if (!Number.isFinite(coarse) || coarse <= 0) return NaN;
+
+  const binWidth = sampleRate / analyser.fftSize;
+  let low = Math.max(binWidth, coarse - 2 * binWidth);
+  let high = coarse + 2 * binWidth;
+
+  for (let i = 0; i < 60 && high - low > 1e-4; i++) {
+    const a = low + (high - low) / 3;
+    const b = high - (high - low) / 3;
+    if (magnitudeAt(windowed, a, sampleRate) < magnitudeAt(windowed, b, sampleRate)) low = a;
+    else high = b;
+  }
+  return (low + high) / 2;
+}
+
+/** Centre frequency of the loudest bin — a seed for the search above, not an answer. */
+function loudestBin(analyser: AnalyserNode, sampleRate: number): number {
   const bins = new Float32Array(analyser.frequencyBinCount);
   analyser.getFloatFrequencyData(bins);
 
@@ -544,13 +697,29 @@ function peakFrequency(analyser: AnalyserNode, sampleRate: number): number {
   for (let i = 1; i < bins.length - 1; i++) {
     if (bins[i] > bins[peak]) peak = i;
   }
-  const a = bins[peak - 1];
-  const b = bins[peak];
-  const c = bins[peak + 1];
-  const denominator = a - 2 * b + c;
-  const offset = denominator === 0 ? 0 : (0.5 * (a - c)) / denominator;
+  return Number.isFinite(bins[peak]) ? (peak * sampleRate) / analyser.fftSize : NaN;
+}
 
-  return ((peak + offset) * sampleRate) / analyser.fftSize;
+/**
+ * |DFT| of `samples` at one arbitrary frequency, by Goertzel's recurrence.
+ *
+ * Two multiplies and two adds per sample with no trigonometry inside the loop, which is what makes
+ * it cheap enough to call a hundred times per read while searching.
+ */
+function magnitudeAt(samples: Float32Array, frequency: number, sampleRate: number): number {
+  const coefficient = 2 * Math.cos((2 * Math.PI * frequency) / sampleRate);
+  let previous = 0;
+  let beforeThat = 0;
+
+  for (const sample of samples) {
+    const current = sample + coefficient * previous - beforeThat;
+    beforeThat = previous;
+    previous = current;
+  }
+
+  return Math.sqrt(
+    Math.max(0, previous * previous + beforeThat * beforeThat - coefficient * previous * beforeThat)
+  );
 }
 
 /** Loudest sample in the analyser's current window. 0 means the node is emitting nothing at all. */
@@ -564,6 +733,12 @@ function peakAmplitude(analyser: AnalyserNode): number {
     if (magnitude > peak) peak = magnitude;
   }
   return peak;
+}
+
+/** Signed distance in cents, formatted. Uses a real minus sign so the log copies cleanly. */
+function offsetCents(measured: number, reference: number): string {
+  const cents = 1200 * Math.log2(measured / reference);
+  return `${cents >= 0 ? "+" : "−"}${Math.abs(cents).toFixed(2)} cents`;
 }
 
 function describe(err: unknown): string {

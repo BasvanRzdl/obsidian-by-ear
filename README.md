@@ -121,9 +121,32 @@ Hence `minify: false` and `target: "es2022"` in `esbuild.config.mjs`, both load-
 guarded by a post-build assertion. The durable fix is to stop depending on
 `Function.prototype.toString()` and ship the worklet as its own file.
 
-Test A is a real measurement rather than a listening test: it plays 440 Hz through the stretcher
-shifted down 37 cents and reports what actually came out, which proves both that the worklet runs
-and that fractional semitones behave as cents.
+### Test A measures, and it also measures itself
+
+Test A is not a listening test. It plays 440 Hz through the stretcher shifted down 37 cents and
+reports what came out, which is what proves fractional semitones behave as cents rather than being
+rounded to whole ones — the one result the whole pitch control depends on.
+
+It takes three readings, because a single number cannot say *whose* fault it is:
+
+1. **bypass** — the tone straight to the analyser, no engine in the path. Our tone, our ruler,
+   nothing else. It should read 440.000, and if it doesn't the test aborts rather than blame the
+   engine for its own error.
+2. **engine at 0 semitones** — any gap from the bypass is the engine, with the measurement ruled
+   out.
+3. **engine at −37 cents** — read against 2, so whatever the engine does at rest cancels out.
+
+Each reading is the median of three, and the spread between them is printed: a tight spread that
+sits in the wrong place is a steady error, a wide one is resynthesis that never settles, and those
+are different bugs.
+
+A note on the ruler, because the obvious version of it is a trap in the other direction. Finding a
+frequency by taking the loudest FFT bin and interpolating a parabola through its neighbours *looks*
+far too coarse to answer a question posed in cents — bins here are 1.35 Hz apart, about 5 cents at
+this pitch. Simulated against the exact tones this test plays, it is accurate to **0.02 cents**. It
+was blamed for a 4-cent error it could not have caused. The DFT search used now is exact and
+robust to messier signals, but the lesson is the general one: check whether your instrument is
+actually the problem before rebuilding it.
 
 ## Built on
 
