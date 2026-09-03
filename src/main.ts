@@ -8,7 +8,7 @@ export const SPIKE_VIEW = "by-ear-spike";
  * plugin is toggled off and on, so "I already fixed that" and "you are running the old build"
  * look identical from the log. Printing this makes that question answerable in one glance.
  */
-const SPIKE_BUILD = "spike-14 (Tests H + I: separate the block from the interval, then listen)";
+const SPIKE_BUILD = "spike-15 (Test J: the control with no engine in it)";
 
 /**
  * Phase 0 spike.
@@ -106,6 +106,9 @@ class SpikeView extends ItemView {
     );
     this.button(controls, "Test I — listen to A/B: default vs bigger block (needs a file, 45 s)", () =>
       this.run("Test I", () => this.testListenBlock())
+    );
+    this.button(controls, "Test J — what is left? five listens incl. NO engine (needs a file, 2 min)", () =>
+      this.run("Test J", () => this.testRemainder())
     );
     this.button(controls, "Stop", () => this.stopAudio());
     this.button(controls, "Reset audio", () => void this.resetAudio());
@@ -845,6 +848,240 @@ class SpikeView extends ItemView {
     }
   }
 
+  // ---------------------------------------------------------------- test J
+
+  /**
+   * Test H fixed the grain. Bas's ear says the Mac still crackles. Both are true, so there are
+   * **two faults**, and this test is for the second one.
+   *
+   * Test H is unambiguous and its control held to three decimal places: the **interval** is the
+   * dominant term, the block is secondary, and `{ blockMs: 200, intervalMs: 25 }` reaches the
+   * bypass floor on both machines while repairing the pitch from +5 cents to under +1. Then Test I
+   * played it as music, and the two devices disagreed with the numbers **in opposite directions**:
+   * the iPad, which measured worse throughout, came back clean with its attacks intact; the Mac,
+   * which measured better at every single row, still crackles obviously and barely differs from
+   * the default. A measurement that says one thing while the ear says the reverse, on the machine
+   * that measured *better*, is not measuring the fault Bas is hearing.
+   *
+   * Three things this spike has been structurally unable to see, which is where the second fault
+   * has to live:
+   *
+   *   1. **Everything is tapped before `ctx.destination`.** Every analyser in this file sits between
+   *      the engine and the output, so the output device, its buffer, its sample-rate conversion and
+   *      any glitching in Electron's audio path are downstream of every number we have ever printed.
+   *   2. **Every measurement so far is steady-state and sampled.** `tonePurity()` reads three
+   *      overlapping 0.7 s windows out of a 20 s listen. A click every few seconds falls between the
+   *      reads, and continuous grain is the only thing that shape can catch.
+   *   3. **Every tone test is mono; the music is stereo.** Test H ran one channel, Test I ran two —
+   *      double the FFT work, on the one machine that is an **Intel** MacBook while the iPad is
+   *      Apple silicon. "Not CPU" was concluded in Test E by an instrument that has since been
+   *      wrong four times.
+   *
+   * So this is five twenty-second listens, and no verdict line:
+   *
+   *   - **A — no engine at all.** The decoded file through a plain `AudioBufferSourceNode` at
+   *     `playbackRate` 0.75, looping the same ten seconds, straight to the destination. This
+   *     control has never been run in fifteen spikes, and it is the one that can end the
+   *     investigation: **if A crackles, the engine was never the problem** and the fault is in the
+   *     output path — Electron, the device, or Bluetooth. The pitch drops, because a buffer source
+   *     resamples rather than stretches; that is expected and irrelevant to hearing a crackle.
+   *   - **B — the engine at block 200 · interval 25.** Test I's B, repeated as the reference.
+   *   - **C — the same, plus `splitComputation`.** That flag exists precisely to spread one block's
+   *     work across several render quanta instead of doing it all in one. If C is cleaner than B,
+   *     the remaining fault is **missed deadlines**, not the algorithm — and an Intel Mac doing
+   *     stereo 8820-point FFTs forty times a second is a plausible place to miss them.
+   *   - **D — block 120 · interval 25.** Well under half the FFT work of B, still 6× less grain than
+   *     the default, and 120 ms of latency instead of 200. If D beats B *on the Mac*, headroom is
+   *     worth more than the last of the grain.
+   *   - **E — the same audio rendered offline, then played back.** An `OfflineAudioContext` has no
+   *     deadline: it renders as fast as it can and nothing can underrun. So if E is clean while B
+   *     is not, the algorithm is innocent and the fault is real-time scheduling, definitively. And
+   *     because the render hands back every sample, this is also the first click detector in the
+   *     spike with **100% coverage** rather than a 5% sample — it reports the biggest
+   *     sample-to-sample discontinuities and when they happened, next to the loop wraps.
+   *
+   * ⚠️ E may simply refuse to run. The engine's `addBuffers` resolves over the worklet's message
+   * port, and an offline context does not pump its audio thread until `startRendering()` — so the
+   * setup can deadlock. It is started before the await for that reason, and if it still fails it is
+   * reported as **the instrument failing**, not as a finding about the audio.
+   */
+  private async testRemainder(): Promise<void> {
+    this.write("TEST J — five 20-second listens. Which of them still crackles?");
+
+    if (!this.picked) {
+      this.write(
+        this.decoding
+          ? "TEST J — the file is still decoding. Wait for the 'decoded in …' line, then try again."
+          : "TEST J — nothing to play. Pick a file with Test B first."
+      );
+      new Notice(this.decoding ? "Still decoding — wait a moment." : "Pick a file first (Test B).");
+      return;
+    }
+
+    try {
+      const ctx = await this.stage("resuming the AudioContext", this.audioContext());
+      this.stopAudio();
+
+      const buffer = this.picked.buffer;
+      const channels: Float32Array[] = [];
+      for (let c = 0; c < buffer.numberOfChannels; c++) {
+        channels.push(buffer.getChannelData(c));
+      }
+      const from = Math.min(60, Math.max(0, buffer.duration - 15));
+      const listen = 20;
+      const loop = 10;
+      const rate = 0.75;
+      const wrap = loop / rate;
+
+      // ---- A: the control that has never been run. No worklet anywhere in this path.
+      this.write(
+        `  ▶ A — no engine at all (plain buffer source, 0.75× resampled, wraps at ${wrap.toFixed(1)} s).` +
+          " The pitch drops; that is expected."
+      );
+      const raw = ctx.createBufferSource();
+      raw.buffer = buffer;
+      raw.playbackRate.value = rate;
+      raw.loop = true;
+      raw.loopStart = from;
+      raw.loopEnd = from + loop;
+      raw.connect(ctx.destination);
+      raw.start(ctx.currentTime + 0.05, from);
+      await sleep(listen * 1000);
+      raw.stop();
+      raw.disconnect();
+      this.write("  … A finished. If that crackled, stop here — the engine is not the problem.");
+      await sleep(1000);
+
+      const half = async (
+        label: string,
+        configure?: Parameters<StretchNode["configure"]>[0]
+      ): Promise<void> => {
+        const stretch = await this.createStretch(ctx, buffer.numberOfChannels);
+        if (configure) stretch.configure(configure);
+
+        let latency = NaN;
+        try {
+          latency = await this.stage("asking the worklet its latency", stretch.latency(), 5000);
+        } catch {
+          /* not worth abandoning a listening test over */
+        }
+
+        await this.stage("handing the audio to the worklet", stretch.addBuffers(channels), 30000);
+
+        const tap = ctx.createAnalyser();
+        tap.fftSize = 2048;
+        stretch.connect(tap);
+        tap.connect(ctx.destination);
+        this.tap = tap;
+        this.stretch = stretch;
+
+        stretch.schedule({
+          output: ctx.currentTime + 0.05,
+          active: true,
+          input: from,
+          rate,
+          semitones: -1,
+          loopStart: from,
+          loopEnd: from + loop,
+        });
+
+        this.write(
+          `  ▶ ${label} — ${Number.isFinite(latency) ? `${(latency * 1000).toFixed(0)} ms latency` : "latency unknown"}` +
+            ` · ${listen} seconds, wrapping at ${wrap.toFixed(1)} s.`
+        );
+
+        await sleep(1400);
+        const peak = peakAmplitude(tap);
+        if (peak < 0.001) {
+          this.write(`  ⚠️ ${label} is SILENT (peak ${peak.toFixed(5)}) — there is nothing to judge.`);
+        }
+        await sleep(listen * 1000 - 1400);
+
+        try {
+          await this.stage("releasing the worklet's audio", stretch.dropBuffers(), 10000);
+        } catch {
+          /* the listening is done */
+        }
+        stretch.disconnect();
+        tap.disconnect();
+        this.stretch = null;
+        this.tap = null;
+        await sleep(1000);
+      };
+
+      await half("B — block 200 · interval 25 (Test I's B)", { blockMs: 200, intervalMs: 25 });
+      await half("C — block 200 · interval 25 + splitComputation", {
+        blockMs: 200,
+        intervalMs: 25,
+        splitComputation: true,
+      });
+      await half("D — block 120 · interval 25 (less work per block)", {
+        blockMs: 120,
+        intervalMs: 25,
+      });
+
+      // ---- E: rendered offline, where there is no deadline to miss.
+      this.write("  ▶ E — rendering the same 20 s offline, with no real-time deadline…");
+      let rendered: AudioBuffer | null = null;
+      try {
+        const lead = 0.5;
+        const offline = new OfflineAudioContext(
+          buffer.numberOfChannels,
+          Math.ceil((listen + lead) * ctx.sampleRate),
+          ctx.sampleRate
+        );
+        const node = await this.createStretch(offline, buffer.numberOfChannels);
+        node.configure({ blockMs: 200, intervalMs: 25 });
+        node.connect(offline.destination);
+
+        // ⚠️ Deliberately not awaited before rendering starts. An offline context does not run its
+        // audio thread until startRendering(), so the port message that addBuffers() waits on
+        // cannot be answered until then — awaiting first is a deadlock, not a slow call.
+        const added = node.addBuffers(channels);
+        void added.catch(() => undefined);
+        node.schedule({
+          output: lead,
+          active: true,
+          input: from,
+          rate,
+          semitones: -1,
+          loopStart: from,
+          loopEnd: from + loop,
+        });
+        rendered = await this.stage("rendering offline", offline.startRendering(), 120000);
+      } catch (err) {
+        this.write(
+          `  ⚠️ E could not run — ${describe(err)}. That is the instrument failing, not a finding ` +
+            "about the audio. Judge B, C and D against A without it."
+        );
+      }
+
+      if (rendered) {
+        this.write(`  ${clickReport(rendered, wrap, 0.5)}`);
+        const play = ctx.createBufferSource();
+        play.buffer = rendered;
+        play.connect(ctx.destination);
+        play.start();
+        this.write(
+          "  ▶ E — playing the offline render. Half a second of silence first, then the same music."
+        );
+        await sleep((rendered.duration + 0.3) * 1000);
+        play.disconnect();
+      }
+
+      this.write(
+        "TEST J done. A first: a crackle there ends the investigation, because that path has no " +
+          "engine in it. Otherwise — C cleaner than B means missed deadlines and the fix is " +
+          "splitComputation; D cleaner than B means the Intel Mac wants less work per block and we " +
+          "trade the last of the grain for headroom; E clean while B crackles proves the algorithm " +
+          "is innocent and the problem is real-time scheduling. E crackling too points back at the " +
+          "loop, and its click list says where."
+      );
+    } catch (err) {
+      this.write(`TEST J FAIL — ${describe(err)}`);
+    }
+  }
+
   // ---------------------------------------------------------------- test F
 
   /**
@@ -1472,7 +1709,7 @@ class SpikeView extends ItemView {
    * locked itself to 0 on the first call and never tried 1 again. Note that the library's own
    * default is 1 — overriding it was the original mistake.
    */
-  private async createStretch(ctx: AudioContext, channels: number): Promise<StretchNode> {
+  private async createStretch(ctx: BaseAudioContext, channels: number): Promise<StretchNode> {
     const options = {
       numberOfInputs: 1,
       numberOfOutputs: 1,
@@ -1513,7 +1750,7 @@ class SpikeView extends ItemView {
    * module never registered and the fault is in loading, not in the processor.
    */
   private watchForProcessorDeath(
-    ctx: AudioContext,
+    ctx: BaseAudioContext,
     options: AudioWorkletNodeOptions
   ): { cancel(): void } {
     let cancelled = false;
@@ -1840,6 +2077,65 @@ function tonePurity(analyser: AnalyserNode, sampleRate: number): { hz: number; j
   }
 
   return { hz, junk: total > 0 ? 100 * Math.sqrt(residual / total) : NaN };
+}
+
+/**
+ * Every sample-to-sample discontinuity in a rendered buffer, and when each one happened.
+ *
+ * This is the first click detector in the spike that misses nothing. Test E and Test F both polled
+ * an analyser every 40 ms and compared 2048-sample windows, so they saw a fraction of the audio and
+ * compared blurred averages of it; a click is a handful of samples wide and slips between reads.
+ * Here the whole render is already in memory, so it looks at **every adjacent pair of samples**.
+ *
+ * The threshold is relative rather than absolute, because a loud passage has bigger legitimate
+ * steps than a quiet one: anything more than 8× the median step is called a click. That number is
+ * a judgement, so the report also prints the median and the biggest steps with their timestamps —
+ * if the list disagrees with the ear, the raw numbers are still there to argue with.
+ *
+ * ⚠️ Times are in **output** seconds, minus the lead-in, so they line up with the loop wraps rather
+ * than with positions in the song.
+ */
+function clickReport(buffer: AudioBuffer, wrapEvery: number, lead: number): string {
+  const rate = buffer.sampleRate;
+  const start = Math.floor(lead * rate);
+  const steps: number[] = [];
+  const found: { at: number; size: number }[] = [];
+
+  for (let c = 0; c < buffer.numberOfChannels; c++) {
+    const data = buffer.getChannelData(c);
+    for (let i = start + 1; i < data.length; i++) {
+      steps.push(Math.abs(data[i] - data[i - 1]));
+    }
+  }
+  if (steps.length === 0) return "E — the render was empty; nothing to inspect.";
+
+  const sorted = Float64Array.from(steps).sort();
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const limit = median * 8;
+
+  for (let c = 0; c < buffer.numberOfChannels; c++) {
+    const data = buffer.getChannelData(c);
+    for (let i = start + 1; i < data.length; i++) {
+      const size = Math.abs(data[i] - data[i - 1]);
+      if (size > limit) found.push({ at: (i - start) / rate, size });
+    }
+  }
+  found.sort((a, b) => b.size - a.size);
+
+  const wraps: string[] = [];
+  for (let t = wrapEvery; t < buffer.duration - lead; t += wrapEvery) wraps.push(`${t.toFixed(1)} s`);
+
+  const biggest = found
+    .slice(0, 6)
+    .map((f) => `${f.size.toFixed(3)}@${f.at.toFixed(1)}s`)
+    .join(" ");
+
+  return (
+    `E — every sample inspected: median step ${median.toFixed(4)}, ` +
+    `${found.length} step${found.length === 1 ? "" : "s"} above 8× that` +
+    (found.length ? ` · biggest ${biggest}` : "") +
+    ` · wraps were due at ${wraps.join(", ") || "never"}`
+  );
 }
 
 /** Loudest sample in the analyser's current window. 0 means the node is emitting nothing at all. */
