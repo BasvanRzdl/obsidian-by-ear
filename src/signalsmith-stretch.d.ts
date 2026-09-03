@@ -30,7 +30,8 @@ declare module "signalsmith-stretch" {
     /** Append buffers, one typed array per channel. Resolves to the new buffer end time. */
     addBuffers(buffers: Float32Array[]): Promise<number>;
     dropBuffers(toSeconds?: number): Promise<{ start: number; end: number }>;
-    latency(): number;
+    /** Every remote method is proxied over the worklet port, so this is async like the rest. */
+    latency(): Promise<number>;
     configure(options: {
       blockMs?: number | null;
       intervalMs?: number;
