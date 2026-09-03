@@ -8,7 +8,17 @@ export const SPIKE_VIEW = "by-ear-spike";
  * plugin is toggled off and on, so "I already fixed that" and "you are running the old build"
  * look identical from the log. Printing this makes that question answerable in one glance.
  */
-const SPIKE_BUILD = "spike-16 (Test J: the control with no engine in it · runs numbered J1–J5)";
+const SPIKE_BUILD = "spike-17 (the leak: a fresh context per listen, and a meter that sees dropouts)";
+
+/**
+ * `AudioContext.renderCapacity` — Web Audio 1.1, Chrome-only for now, so it is typed here rather
+ * than assumed. `underrunRatio` is the fraction of render quanta that missed their deadline, which
+ * is the one number this whole investigation has been missing.
+ */
+interface RenderCapacity extends EventTarget {
+  start(options?: { updateInterval?: number }): void;
+  stop(): void;
+}
 
 /**
  * Phase 0 spike.
@@ -35,6 +45,25 @@ class SpikeView extends ItemView {
   private decoding = false;
   private log: string[] = [];
   private logEl!: HTMLElement;
+  /**
+   * How many worklet nodes have been built in the **current** context.
+   *
+   * ⚠️ This is a leak counter, not a statistic. `SignalsmithStretch.mjs:351` returns `true` from
+   * `process()` unconditionally, which sets the processor's active source flag — the spec then
+   * requires the node to be **retained and kept processing with no inputs connected**
+   * (WebAudio/web-audio-api#2658, open, reproduced in Chrome and Firefox). `disconnect()` does not
+   * stop it. Nulling the reference does not stop it. `schedule({ active: false })` does not stop it
+   * either: the inactive branch at `SignalsmithStretch.mjs:274` still calls `_process()` under a
+   * comment that reads "Should detect silent input and skip processing" — a hope, not a contract.
+   *
+   * So every node ever built keeps burning its FFT on the audio thread until the **context closes**,
+   * which is the only reliable kill. On 3 September 2026 that produced the whole mystery: the third
+   * run of Test J was audibly worse than the first on the same code and the same file, because the
+   * first two runs had left six phase vocoders running underneath it.
+   */
+  private nodesBuilt = 0;
+  /** Output-buffer size for the next context. `playback` trades latency for underrun headroom. */
+  private latencyHint: AudioContextLatencyCategory = "interactive";
 
   getViewType(): string {
     return SPIKE_VIEW;
@@ -112,6 +141,18 @@ class SpikeView extends ItemView {
     );
     this.button(controls, "Stop", () => this.stopAudio());
     this.button(controls, "Reset audio", () => void this.resetAudio());
+    // The output buffer is the deadline every dropout is measured against. Chrome's default
+    // ("interactive") is 128 frames — 2.9 ms at 44.1 kHz — which is a very tight budget for a WASM
+    // phase vocoder. We already accept 120–200 ms of engine latency, so buying headroom here costs
+    // nothing we care about. A toggle rather than a silent change, so the difference is audible.
+    this.button(controls, `Output buffer: ${this.latencyHint} — click to switch`, (btn) => {
+      this.latencyHint = this.latencyHint === "interactive" ? "playback" : "interactive";
+      btn.setText(`Output buffer: ${this.latencyHint} — click to switch`);
+      this.write(
+        `output buffer set to "${this.latencyHint}" — it takes effect on the next test, which ` +
+          "opens a fresh context anyway."
+      );
+    });
     this.button(controls, "Copy report", () => this.copyReport());
 
     root.createEl("h3", { text: "Results" });
@@ -762,7 +803,7 @@ class SpikeView extends ItemView {
     }
 
     try {
-      const ctx = await this.stage("resuming the AudioContext", this.audioContext());
+      // No context is opened here on purpose — each half opens its own. See the note inside.
       this.stopAudio();
 
       const buffer = this.picked.buffer;
@@ -776,6 +817,10 @@ class SpikeView extends ItemView {
         label: string,
         configure?: Parameters<StretchNode["configure"]>[0]
       ): Promise<void> => {
+        // ⚠️ A brand new context per half, or I2 is judged with I1's leaked processor still
+        // running underneath it — which is exactly the bias this test was built to avoid.
+        const ctx = await this.freshContext();
+        const load = this.watchLoad(ctx);
         const stretch = await this.createStretch(ctx, buffer.numberOfChannels);
         if (configure) stretch.configure(configure);
 
@@ -820,6 +865,7 @@ class SpikeView extends ItemView {
         }
 
         await sleep(18600);
+        this.write(`  … ${label.slice(0, 2)} finished · ${load.stop()}`);
 
         try {
           await this.stage("releasing the worklet's audio", stretch.dropBuffers(), 10000);
@@ -936,11 +982,12 @@ class SpikeView extends ItemView {
       const rate = 0.75;
       const wrap = loop / rate;
 
-      // ---- A: the control that has never been run. No worklet anywhere in this path.
+      // ---- J1: the control that has never been run. No worklet anywhere in this path.
       this.write(
         `  ▶ J1 — no engine at all (plain buffer source, 0.75× resampled, wraps at ${wrap.toFixed(1)} s).` +
           " The pitch drops; that is expected."
       );
+      const rawLoad = this.watchLoad(ctx);
       const raw = ctx.createBufferSource();
       raw.buffer = buffer;
       raw.playbackRate.value = rate;
@@ -952,13 +999,18 @@ class SpikeView extends ItemView {
       await sleep(listen * 1000);
       raw.stop();
       raw.disconnect();
-      this.write("  … J1 finished. If that crackled, stop here — the engine is not the problem.");
+      this.write(`  … J1 finished · ${rawLoad.stop()} · 0 worklets built.`);
       await sleep(1000);
 
       const half = async (
         label: string,
         configure?: Parameters<StretchNode["configure"]>[0]
       ): Promise<void> => {
+        // ⚠️ A brand new context per variant. Otherwise J4 is judged on a machine already running
+        // J2's and J3's leaked processors, and the comparison measures the order of the list rather
+        // than the settings. See `nodesBuilt`.
+        const ctx = await this.freshContext();
+        const load = this.watchLoad(ctx);
         const stretch = await this.createStretch(ctx, buffer.numberOfChannels);
         if (configure) stretch.configure(configure);
 
@@ -999,6 +1051,7 @@ class SpikeView extends ItemView {
           this.write(`  ⚠️ ${label} is SILENT (peak ${peak.toFixed(5)}) — there is nothing to judge.`);
         }
         await sleep(listen * 1000 - 1400);
+        this.write(`  … ${label.slice(0, 2)} finished · ${load.stop()} · ${this.nodesBuilt} worklet(s) running.`);
 
         try {
           await this.stage("releasing the worklet's audio", stretch.dropBuffers(), 10000);
@@ -1023,15 +1076,17 @@ class SpikeView extends ItemView {
         intervalMs: 25,
       });
 
-      // ---- E: rendered offline, where there is no deadline to miss.
+      // ---- J5: rendered offline, where there is no deadline to miss.
+      // A live context of its own, because `half()` closed the one this test opened with.
+      const playCtx = await this.freshContext();
       this.write("  ▶ J5 — rendering the same 20 s offline, with no real-time deadline…");
       let rendered: AudioBuffer | null = null;
       try {
         const lead = 0.5;
         const offline = new OfflineAudioContext(
           buffer.numberOfChannels,
-          Math.ceil((listen + lead) * ctx.sampleRate),
-          ctx.sampleRate
+          Math.ceil((listen + lead) * playCtx.sampleRate),
+          playCtx.sampleRate
         );
         const node = await this.createStretch(offline, buffer.numberOfChannels);
         node.configure({ blockMs: 200, intervalMs: 25 });
@@ -1061,9 +1116,9 @@ class SpikeView extends ItemView {
 
       if (rendered) {
         this.write(`  ${clickReport(rendered, wrap, 0.5)}`);
-        const play = ctx.createBufferSource();
+        const play = playCtx.createBufferSource();
         play.buffer = rendered;
-        play.connect(ctx.destination);
+        play.connect(playCtx.destination);
         play.start();
         this.write(
           "  ▶ J5 — playing the offline render. Half a second of silence first, then the same music."
@@ -1721,6 +1776,8 @@ class SpikeView extends ItemView {
     const watcher = this.watchForProcessorDeath(ctx, options);
     try {
       const stretch = await this.stage("building the worklet node", SignalsmithStretch(ctx, options), 8000);
+      // Counted, because this node can no longer be got rid of without closing the context.
+      this.nodesBuilt++;
       // A dead worklet is otherwise indistinguishable from a working one playing a silent file.
       // ⚠️ Necessary but not sufficient: under spike-5 the processor provably died on its first
       // render quantum and this event never fired once. That is why every test now *measures*
@@ -1814,10 +1871,91 @@ class SpikeView extends ItemView {
   }
 
   /** iOS will not start audio outside a user gesture, so this is only ever called from a click. */
+  /**
+   * Closes the context and opens a new one, which is the **only** way to retire a worklet.
+   *
+   * See `nodesBuilt` for why nothing softer works. Every test calls this before it starts, so no
+   * test ever inherits another test's leaked processors — and inside the listening tests it is
+   * called between variants too, because otherwise the last variant is judged against a busier
+   * machine than the first and the comparison is worthless.
+   *
+   * On iOS a fresh context starts suspended and needs a user gesture, which is satisfied because
+   * every test is started by a click. `audioContext()` resumes it.
+   */
+  private async freshContext(): Promise<AudioContext> {
+    this.stopAudio();
+    try {
+      await this.ctx?.close();
+    } catch {
+      /* already closed */
+    }
+    this.ctx = null;
+    this.nodesBuilt = 0;
+    return this.audioContext();
+  }
+
+  /**
+   * The first instrument here that can see a dropout.
+   *
+   * Everything else in this file taps between the engine and `ctx.destination`, so it measures the
+   * graph. An underrun happens **after** the graph, when the audio thread misses its deadline and
+   * the device gets handed nothing — which is why five instruments in a row read clean while Bas
+   * could plainly hear the fault. `AudioContext.renderCapacity` reports from the other side of that
+   * line: `underrunRatio` is the fraction of render quanta that missed, and `peakLoad` is how close
+   * to the deadline the worst quantum came (1.0 means it arrived exactly late).
+   *
+   * ⚠️ Feature-detected on purpose. It is Web Audio 1.1 and Chrome-only at the time of writing, so
+   * the iPad will almost certainly report nothing — and a missing meter must read as "no data", never
+   * as a pass. `AudioContext.playbackStats` (`underrunEvents`) is the better API and needs Chrome
+   * 146; Obsidian is on 142, so it is checked for and skipped.
+   */
+  private watchLoad(ctx: AudioContext): { stop(): string } {
+    const capacity = (ctx as unknown as { renderCapacity?: RenderCapacity }).renderCapacity;
+    if (!capacity) return { stop: () => "load: not reported on this platform" };
+
+    let peak = 0;
+    let average = 0;
+    let underrun = 0;
+    let updates = 0;
+    const onUpdate = (event: Event) => {
+      const e = event as unknown as { averageLoad: number; peakLoad: number; underrunRatio: number };
+      updates++;
+      average = Math.max(average, e.averageLoad);
+      peak = Math.max(peak, e.peakLoad);
+      underrun = Math.max(underrun, e.underrunRatio);
+    };
+
+    try {
+      capacity.addEventListener("update", onUpdate);
+      capacity.start({ updateInterval: 0.5 });
+    } catch {
+      return { stop: () => "load: the meter would not start" };
+    }
+
+    return {
+      stop: () => {
+        try {
+          capacity.stop();
+          capacity.removeEventListener("update", onUpdate);
+        } catch {
+          /* the reading is already taken */
+        }
+        if (updates === 0) return "load: the meter reported nothing";
+        return (
+          `load ${(average * 100).toFixed(0)}% avg, ${(peak * 100).toFixed(0)}% peak · ` +
+          `underruns ${(underrun * 100).toFixed(2)}%${underrun > 0 ? " ← DROPOUTS" : ""}`
+        );
+      },
+    };
+  }
+
   private async audioContext(): Promise<AudioContext> {
     if (!this.ctx) {
-      this.ctx = new AudioContext();
-      this.write(`AudioContext created at ${this.ctx.sampleRate} Hz`);
+      this.ctx = new AudioContext({ latencyHint: this.latencyHint });
+      this.write(
+        `AudioContext created at ${this.ctx.sampleRate} Hz · latencyHint "${this.latencyHint}" · ` +
+          `output buffer ${(this.ctx.baseLatency * 1000).toFixed(1)} ms`
+      );
       if (Platform.isMobile) {
         // Every test here decides PASS by measuring the signal, which means a muted device passes
         // silently and reads as "the engine is broken" to whoever is holding it. Say so up front,
@@ -1893,15 +2031,23 @@ class SpikeView extends ItemView {
     }
     this.busy = name;
     try {
+      // ⚠️ Every test starts on a brand new context. Without this, a test is judged on a machine
+      // already carrying every worklet the previous tests leaked — which is exactly what made the
+      // same test sound clean on one run and crackle on the next, and cost an evening.
+      await this.freshContext();
       await test();
     } finally {
       this.busy = null;
     }
   }
 
-  private button(parent: HTMLElement, label: string, onClick: () => void): void {
+  private button(
+    parent: HTMLElement,
+    label: string,
+    onClick: (btn: HTMLButtonElement) => void
+  ): void {
     const btn = parent.createEl("button", { text: label });
-    btn.addEventListener("click", onClick);
+    btn.addEventListener("click", () => onClick(btn));
   }
 
   private write(line: string): void {
@@ -2111,6 +2257,28 @@ function clickReport(buffer: AudioBuffer, wrapEvery: number, lead: number): stri
     }
   }
   if (steps.length === 0) return "J5 — the render was empty; nothing to inspect.";
+
+  // ⚠️ Silence first, and this is not defensive padding — on 3 September 2026 the offline render
+  // came back as twenty seconds of pure zeros (the `addBuffers` deadlock), and this function
+  // reported "median step 0.0000, 0 steps above 8× that" and read as a *perfect* result. Every
+  // sample was identical, the threshold was 8 × 0 = 0, and nothing can exceed zero. It was the
+  // sixth instrument that evening to report clean on a fault it could not have detected. A
+  // detector that cannot fail is not a detector.
+  let loudest = 0;
+  for (let c = 0; c < buffer.numberOfChannels; c++) {
+    const data = buffer.getChannelData(c);
+    for (let i = start; i < data.length; i++) {
+      const magnitude = Math.abs(data[i]);
+      if (magnitude > loudest) loudest = magnitude;
+    }
+  }
+  if (loudest < 0.001) {
+    return (
+      `J5 — ⚠️ THE RENDER IS SILENT (peak ${loudest.toFixed(5)}). No verdict: this is the ` +
+      "instrument failing, not the audio passing. The offline context almost certainly deadlocked " +
+      "on addBuffers."
+    );
+  }
 
   const sorted = Float64Array.from(steps).sort();
   const median = sorted[Math.floor(sorted.length / 2)];
