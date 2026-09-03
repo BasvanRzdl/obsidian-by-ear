@@ -8,7 +8,7 @@ export const SPIKE_VIEW = "by-ear-spike";
  * plugin is toggled off and on, so "I already fixed that" and "you are running the old build"
  * look identical from the log. Printing this makes that question answerable in one glance.
  */
-const SPIKE_BUILD = "spike-10 (Test E: measure the dropouts, and find what stops them)";
+const SPIKE_BUILD = "spike-11 (one test at a time · excerpt bug fixed · crackle counted)";
 
 /**
  * Phase 0 spike.
@@ -29,6 +29,10 @@ class SpikeView extends ItemView {
   private picked: { name: string; size: number; buffer: AudioBuffer } | null = null;
   /** Analyser tapped between the stretch node and the speakers, so silence is measured not guessed. */
   private tap: AnalyserNode | null = null;
+  /** Name of the test currently running, or null. See `run()` for why this exists. */
+  private busy: string | null = null;
+  /** True between the picker returning and the decode finishing — a real state, not "nothing here". */
+  private decoding = false;
   private log: string[] = [];
   private logEl!: HTMLElement;
 
@@ -61,24 +65,36 @@ class SpikeView extends ItemView {
 
     const controls = root.createDiv({ cls: "by-ear-controls" });
 
-    this.button(controls, "Test A — boot engine + measure pitch", () => this.testEngine());
+    this.button(controls, "Test A — boot engine + measure pitch", () =>
+      this.run("Test A", () => this.testEngine())
+    );
 
     const fileRow = controls.createDiv();
     fileRow.createEl("label", { text: "Test B — pick a file (iCloud Drive is in here): " });
     const input = fileRow.createEl("input", { type: "file" });
-    input.setAttr("accept", "audio/*,video/*");
+    // ⚠️ Explicit extensions alongside the wildcards. On 3 September 2026 the iOS Files picker
+    // greyed out every mp3 with `accept="audio/*,video/*"` — it maps `accept` onto UTIs, and the
+    // audio wildcard did not come back with one that includes mp3. Named extensions are the
+    // portable way to say what we mean, and a picker that hides the file is indistinguishable
+    // from a device that cannot read it.
+    input.setAttr(
+      "accept",
+      "audio/*,video/*,.mp3,.m4a,.aac,.wav,.aiff,.aif,.flac,.ogg,.opus,.mp4,.m4v,.mov"
+    );
     input.addEventListener("change", () => {
       const file = input.files?.[0];
-      if (file) void this.testDecode(file);
+      if (file) void this.run("Test B", () => this.testDecode(file));
     });
 
     this.button(controls, "Test C — play the picked file at 0.75× / −100 cents", () =>
-      this.testPlayback()
+      this.run("Test C", () => this.testPlayback())
     );
     this.button(controls, "Test D — re-tune a node while it is playing", () =>
-      this.testRescheduling()
+      this.run("Test D", () => this.testRescheduling())
     );
-    this.button(controls, "Test E — hunt the dropouts (needs a file)", () => this.testDropouts());
+    this.button(controls, "Test E — hunt the dropouts (needs a file)", () =>
+      this.run("Test E", () => this.testDropouts())
+    );
     this.button(controls, "Stop", () => this.stopAudio());
     this.button(controls, "Reset audio", () => void this.resetAudio());
     this.button(controls, "Copy report", () => this.copyReport());
@@ -343,8 +359,14 @@ class SpikeView extends ItemView {
    * spike has found — a player that stutters is not usable for transcription, and unlike a 1.5 cent
    * pitch offset it is not a number nobody can hear. But "a bit" cannot be optimised against, and
    * asking a person to A/B four configurations by ear is both unkind and unreliable, so this
-   * measures it: play for six seconds, sample the output every 40 ms, and count the windows where
-   * the sound falls away.
+   * measures it: play for six seconds, sample the output every 40 ms, and count both **holes** in
+   * the sound and **clicks** in it.
+   *
+   * ⚠️ Counting only holes was the first version's mistake. Bas reported *crackle*, and a level
+   * meter is blind to it — a click is not an absence of signal but a discontinuity, a step between
+   * adjacent samples far bigger than the waveform's own slew. So `windowStats()` returns both, and
+   * a window is only checked for clicks when it is not already inside a dropout, or every gap gets
+   * counted twice under two names.
    *
    * Two suspects, so the runs vary two things independently:
    *
@@ -362,11 +384,17 @@ class SpikeView extends ItemView {
    * either miss dropouts in a loud passage or invent them in a soft one.
    */
   private async testDropouts(): Promise<void> {
-    this.write("TEST E — hunting the dropouts. Five runs, about a minute. Listen along.");
+    this.write(
+      "TEST E — hunting dropouts and crackle. Six runs, about a minute and a half. Listen along."
+    );
 
     if (!this.picked) {
-      this.write("TEST E — nothing to play. Pick a file with Test B first.");
-      new Notice("Pick a file first (Test B).");
+      this.write(
+        this.decoding
+          ? "TEST E — the file is still decoding. Wait for the 'decoded in …' line, then try again."
+          : "TEST E — nothing to play. Pick a file with Test B first."
+      );
+      new Notice(this.decoding ? "Still decoding — wait a moment." : "Pick a file first (Test B).");
       return;
     }
 
@@ -377,12 +405,21 @@ class SpikeView extends ItemView {
       const buffer = this.picked.buffer;
       const from = Math.min(60, Math.max(0, buffer.duration - 15));
 
-      /** The whole song, or just the loop region plus a margin — the first suspect. */
+      /**
+       * The whole song, or just the loop region plus a margin — the first suspect.
+       *
+       * ⚠️ `offset` is the position **within the buffer we hand over**, which is not the same
+       * number as the position within the song. Getting that wrong is what silenced both excerpt
+       * runs on 3 September 2026: the slice starts at the loop point, so inside it the loop begins
+       * at **0**, but the schedule asked for 60 s — past the end of a 12 second buffer. The runs
+       * reported `SILENT — nothing to measure`, which read like a finding and was a subtraction
+       * I failed to do. It also killed exactly the comparison the test exists for.
+       */
       const slice = (whole: boolean): { channels: Float32Array[]; offset: number } => {
         if (whole) {
           const channels: Float32Array[] = [];
           for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
-          return { channels, offset: 0 };
+          return { channels, offset: from };
         }
         const start = Math.floor(from * buffer.sampleRate);
         const end = Math.min(buffer.length, Math.floor((from + 12) * buffer.sampleRate));
@@ -390,7 +427,7 @@ class SpikeView extends ItemView {
         for (let c = 0; c < buffer.numberOfChannels; c++) {
           channels.push(buffer.getChannelData(c).slice(start, end));
         }
-        return { channels, offset: from };
+        return { channels, offset: 0 };
       };
 
       // ⚠️ `splitComputation` is only read on the branch that also sets `blockMs`
@@ -412,6 +449,13 @@ class SpikeView extends ItemView {
           configure: { blockMs: 100, intervalMs: 25, splitComputation: true },
         },
         { label: "12 s excerpt, preset cheaper", whole: false, configure: { preset: "cheaper" } },
+        // The control, and the only reason the four above can be compared at all. It repeats run 1
+        // verbatim at the end. If it comes back worse than run 1 did, the runs are not independent
+        // — the device is simply more tired — and the differences between them mean nothing. On
+        // 3 September the numbers got monotonically worse in the order they ran (18.3 → 19.2 →
+        // 23.3 %), which is what memory accumulation looks like and what a config difference does
+        // not.
+        { label: "whole song, default (repeat — the control)", whole: true },
       ];
 
       for (const run of runs) {
@@ -443,12 +487,24 @@ class SpikeView extends ItemView {
         // representative of anything, and counting them as dropouts would flatter the later runs.
         await sleep(600);
 
-        const peaks: number[] = [];
+        const windows: { peak: number; jump: number }[] = [];
         for (let i = 0; i < 120; i++) {
-          peaks.push(peakAmplitude(tap));
+          windows.push(windowStats(tap));
           await sleep(40);
         }
+        const peaks = windows.map((w) => w.peak);
 
+        // Hand the memory back before the next run rather than leaving five nodes' worth of
+        // decoded audio for the collector to find later. `dropBuffers()` with no argument releases
+        // everything and transfers the ArrayBuffers back out of the worklet, which is the
+        // library's own mechanism and does not disturb the AudioContext — closing and reopening
+        // that would be the obvious alternative and a bad one, because iOS only reliably resumes a
+        // context from inside a user gesture and there isn't one in the middle of a loop.
+        try {
+          await this.stage("releasing the worklet's audio", node.dropBuffers(), 10000);
+        } catch (err) {
+          this.write(`  (could not release buffers: ${describe(err)})`);
+        }
         node.disconnect();
         tap.disconnect();
         this.stretch = null;
@@ -461,34 +517,51 @@ class SpikeView extends ItemView {
           continue;
         }
 
+        const jumpsSorted = [...windows.map((w) => w.jump)].sort((a, b) => a - b);
+        const medianJump = jumpsSorted[Math.floor(jumpsSorted.length / 2)];
+
         const floor = median / 20;
         let quiet = 0;
         let longestRun = 0;
         let currentRun = 0;
-        for (const peak of peaks) {
-          if (peak < floor) {
+        let clicks = 0;
+        for (const w of windows) {
+          if (w.peak < floor) {
             quiet++;
             currentRun++;
             longestRun = Math.max(longestRun, currentRun);
           } else {
             currentRun = 0;
+            // Only outside a dropout: the edges of a hole in the sound are themselves large jumps,
+            // and counting those would report every gap twice under two different names.
+            if (medianJump > 0 && w.jump > 8 * medianJump) clicks++;
           }
         }
 
-        const percent = (100 * quiet) / peaks.length;
+        const percent = (100 * quiet) / windows.length;
+        const verdict =
+          quiet === 0 && clicks === 0
+            ? "✅ clean"
+            : [
+                quiet > 0 ? `⚠️ ${quiet}/${windows.length} quiet (${percent.toFixed(1)}%)` : null,
+                clicks > 0 ? `⚠️ ${clicks} windows with clicks` : null,
+              ]
+                .filter(Boolean)
+                .join(", ");
+
         this.write(
-          `  ${run.label} (${megabytes.toFixed(0)} MB): ` +
-            `${quiet === 0 ? "✅ clean" : `⚠️ ${quiet}/${peaks.length} windows quiet (${percent.toFixed(1)}%)`}` +
+          `  ${run.label} (${megabytes.toFixed(0)} MB): ${verdict}` +
             `${longestRun > 1 ? `, worst gap ~${longestRun * 40} ms` : ""}` +
-            ` · median peak ${median.toFixed(3)}, quietest ${sorted[0].toFixed(3)}`
+            ` · median peak ${median.toFixed(3)}, quietest ${sorted[0].toFixed(3)}` +
+            ` · jump ${medianJump.toFixed(3)}→${jumpsSorted[jumpsSorted.length - 1].toFixed(3)}`
         );
       }
 
       this.write(
-        "TEST E done. Compare the pairs, not the absolute numbers: excerpt beating whole song " +
-          "means the fix is chunked loading, and split/cheaper beating default means it is CPU. " +
-          "Both clean means what you heard is below this method's floor — say so and we measure " +
-          "differently."
+        "TEST E done. Read the control line first: if the repeat is worse than run 1, the runs " +
+          "are not independent and the differences between them mean nothing. Then compare pairs — " +
+          "excerpt beating whole song means the fix is chunked loading, cheaper/split beating " +
+          "default means it is CPU."
       );
     } catch (err) {
       this.write(`TEST E FAIL — ${describe(err)}`);
@@ -625,6 +698,7 @@ class SpikeView extends ItemView {
     this.write(`picked "${file.name}" · ${(file.size / 1e6).toFixed(1)} MB · type "${file.type}"`);
     this.write("TEST B PASS — the file picker returned a file.");
 
+    this.decoding = true;
     try {
       const ctx = await this.audioContext();
       const started = performance.now();
@@ -647,6 +721,8 @@ class SpikeView extends ItemView {
     } catch (err) {
       this.write(`decode FAILED — ${describe(err)}`);
       this.write("NOTE — this is why /by-ear should extract an mp3 sidecar for video.");
+    } finally {
+      this.decoding = false;
     }
   }
 
@@ -661,8 +737,15 @@ class SpikeView extends ItemView {
     if (!this.picked) {
       // Written to the log, not only to a Notice — Test B reports PASS the moment the picker
       // returns, so a file whose decode then failed leaves nothing here and a toast is easy to miss.
-      this.write("TEST C — nothing to play. Pick a file with Test B first (and check it decoded).");
-      new Notice("Pick a file first (Test B).");
+      // And "still decoding" is a different state from "nothing here": Test B prints PASS as soon
+      // as the picker returns, so there is a real window, seconds long on a big file, where the
+      // log looks finished and the buffer does not exist yet.
+      this.write(
+        this.decoding
+          ? "TEST C — the file is still decoding. Wait for the 'decoded in …' line, then try again."
+          : "TEST C — nothing to play. Pick a file with Test B first (and check it decoded)."
+      );
+      new Notice(this.decoding ? "Still decoding — wait a moment." : "Pick a file first (Test B).");
       return;
     }
     try {
@@ -921,6 +1004,37 @@ class SpikeView extends ItemView {
     this.tap = null;
   }
 
+  /**
+   * Runs a test, and refuses to start a second one while the first is still going.
+   *
+   * ⚠️ Not defensive tidying — the lack of this produced three separate false findings in one
+   * report on 3 September 2026, and each looked exactly like a platform limitation:
+   *
+   *   - Two Test A runs at once each tried to build a worklet node, and both reported
+   *     `HUNG at "building the worklet node"` after 8 s. Read as a CSP or WebView failure.
+   *   - Test C started while Test D was mid-variant. Test C opens by calling `stopAudio()`, which
+   *     acts on the shared `this.stretch` — so it tore down **Test D's** node, and Test D honestly
+   *     reported `❌ SILENT after re-tuning`. The identical run had passed four out of four
+   *     minutes earlier.
+   *   - Test C ran twice concurrently, each holding 155 MB.
+   *
+   * A spike exists to produce trustworthy facts. One that lets two tests share an AudioContext and
+   * a `this.stretch` field produces confident, well-formatted fiction instead.
+   */
+  private async run(name: string, test: () => Promise<void>): Promise<void> {
+    if (this.busy) {
+      this.write(`⏳ ${name} ignored — ${this.busy} is still running. One at a time.`);
+      new Notice(`${this.busy} is still running.`);
+      return;
+    }
+    this.busy = name;
+    try {
+      await test();
+    } finally {
+      this.busy = null;
+    }
+  }
+
   private button(parent: HTMLElement, label: string, onClick: () => void): void {
     const btn = parent.createEl("button", { text: label });
     btn.addEventListener("click", onClick);
@@ -1020,6 +1134,35 @@ function magnitudeAt(samples: Float32Array, frequency: number, sampleRate: numbe
   return Math.sqrt(
     Math.max(0, previous * previous + beforeThat * beforeThat - coefficient * previous * beforeThat)
   );
+}
+
+/**
+ * Peak level *and* the largest sample-to-sample step in the analyser's current window.
+ *
+ * The step is there to catch what a level meter cannot: **crackle**. A dropout is a hole in the
+ * sound and shows up as a window with no level, but a click has plenty of level — it is a
+ * discontinuity, a jump between two adjacent samples far larger than the waveform's own slew. Bas
+ * reported both on the iPad on 3 September 2026, and the test at the time could only see one of
+ * them, so it agreed the audio was fine while he was listening to it not be.
+ *
+ * Absolute thresholds are useless here (a cymbal has bigger steps than a bass note), so the caller
+ * compares each window's jump against the median jump of the whole run.
+ */
+function windowStats(analyser: AnalyserNode): { peak: number; jump: number } {
+  const samples = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(samples);
+
+  let peak = 0;
+  let jump = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const magnitude = Math.abs(samples[i]);
+    if (magnitude > peak) peak = magnitude;
+    if (i > 0) {
+      const step = Math.abs(samples[i] - samples[i - 1]);
+      if (step > jump) jump = step;
+    }
+  }
+  return { peak, jump };
 }
 
 /** Loudest sample in the analyser's current window. 0 means the node is emitting nothing at all. */
