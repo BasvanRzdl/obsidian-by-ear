@@ -119,11 +119,16 @@ class SpikeView extends ItemView {
   // ---------------------------------------------------------------- test A
 
   /**
-   * Plays a 440 Hz tone through the stretcher, shifted down 37 cents, and measures what
-   * actually comes out. 440 * 2^(-0.37/12) = 430.68 Hz.
+   * Boots the engine and measures whether fractional semitones really behave as cents.
    *
-   * Measuring rather than listening is the point: it proves the worklet runs AND that
-   * fractional semitones behave as cents, which is the whole basis of the pitch control.
+   * It plays one 440 Hz tone through one node and reads the output frequency twice: once
+   * unshifted, once asked for −37 cents. The answer is the *ratio* between the two, not
+   * either absolute reading.
+   *
+   * That matters. A single absolute reading can't separate an engine error from the FFT's
+   * own resolution — at 32768 bins and 44.1 kHz a bin is 1.35 Hz, which is about 4 cents at
+   * this pitch, so an honest engine still looks a few cents off. Measuring the same tone
+   * twice through the same analyser cancels that bias and leaves only the engine.
    */
   private async testEngine(): Promise<void> {
     try {
@@ -133,7 +138,13 @@ class SpikeView extends ItemView {
         numberOfOutputs: 1,
         outputChannelCount: [1],
       });
-      this.write(`engine booted. worklet latency ${(stretch.latency() * 1000).toFixed(1)} ms`);
+      // latency() is documented for live-input mode and returns NaN for buffer playback,
+      // which is what we're doing. Not a failure, so don't report it as one.
+      const latency = stretch.latency();
+      this.write(
+        "TEST A — engine booted" +
+          (Number.isFinite(latency) ? `, worklet latency ${(latency * 1000).toFixed(1)} ms` : "")
+      );
 
       const seconds = 2;
       const length = Math.floor(ctx.sampleRate * seconds);
@@ -151,31 +162,58 @@ class SpikeView extends ItemView {
       stretch.connect(analyser);
       analyser.connect(gain);
       gain.connect(ctx.destination);
-
-      stretch.schedule({
-        output: ctx.currentTime + 0.05,
-        active: true,
-        input: 0,
-        rate: 1,
-        semitones: -0.37,
-        loopStart: 0,
-        loopEnd: seconds,
-      });
       this.stretch = stretch;
 
-      await sleep(900);
-      const measured = peakFrequency(analyser, ctx.sampleRate);
-      const expected = 440 * Math.pow(2, -0.37 / 12);
-      const errorCents = 1200 * Math.log2(measured / expected);
+      const readAt = async (semitones: number): Promise<number> => {
+        stretch.schedule({
+          output: ctx.currentTime + 0.05,
+          active: true,
+          input: 0,
+          rate: 1,
+          semitones,
+          loopStart: 0,
+          loopEnd: seconds,
+        });
+        await sleep(900);
+        return peakFrequency(analyser, ctx.sampleRate);
+      };
 
+      // The shifted read comes first, because that ordering is the one verified working in a
+      // browser harness. The unshifted read is a refinement, and re-scheduling a live node is
+      // not yet proven, so the verdict degrades to the absolute measurement if it comes back
+      // silent. A quirk in the second schedule must not masquerade as a broken engine.
+      const shifted = await readAt(-0.37);
+      if (!Number.isFinite(shifted)) {
+        this.write("TEST A FAIL — the node produced silence. The worklet is not processing.");
+        return;
+      }
+
+      const reference = await readAt(0);
+      if (Number.isFinite(reference)) {
+        const cents = 1200 * Math.log2(shifted / reference);
+        this.write(
+          `reference ${reference.toFixed(2)} Hz · shifted ${shifted.toFixed(2)} Hz · ` +
+            `delta ${cents.toFixed(2)} cents (asked for −37.00)`
+        );
+        this.write(
+          Math.abs(cents + 37) < 2
+            ? "TEST A PASS — worklet runs and fractional semitones behave as cents."
+            : "TEST A SUSPECT — audible, but the pitch shift is off. Don't trust cents yet."
+        );
+        return;
+      }
+
+      const expected = 440 * Math.pow(2, -0.37 / 12);
+      const errorCents = 1200 * Math.log2(shifted / expected);
       this.write(
-        `measured ${measured.toFixed(2)} Hz · expected ${expected.toFixed(2)} Hz · ` +
+        `measured ${shifted.toFixed(2)} Hz · expected ${expected.toFixed(2)} Hz · ` +
           `error ${errorCents.toFixed(1)} cents`
       );
+      this.write("(the unshifted reference read came back silent — re-scheduling a live node)");
       this.write(
-        Math.abs(errorCents) < 5
-          ? "TEST A PASS — worklet runs and fractional semitones behave as cents."
-          : "TEST A SUSPECT — tone is audible but pitch is off. Investigate before trusting cents."
+        Math.abs(errorCents) < 8
+          ? "TEST A PASS — worklet runs and the shift is right to within FFT resolution."
+          : "TEST A SUSPECT — audible, but the pitch shift is off. Don't trust cents yet."
       );
     } catch (err) {
       this.write(`TEST A FAIL — ${describe(err)}`);
