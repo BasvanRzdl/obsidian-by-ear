@@ -1,0 +1,42 @@
+.by-ear-spike .by-ear-muted {
+  color: var(--text-muted);
+}
+
+.by-ear-spike table.by-ear-env {
+  width: 100%;
+  margin-bottom: 1em;
+}
+
+.by-ear-spike table.by-ear-env td {
+  padding: 2px 8px 2px 0;
+  vertical-align: top;
+  font-size: var(--font-ui-small);
+}
+
+.by-ear-spike table.by-ear-env td:first-child {
+  color: var(--text-muted);
+  white-space: nowrap;
+  width: 9em;
+}
+
+.by-ear-spike .by-ear-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  margin-bottom: 1em;
+}
+
+.by-ear-spike .by-ear-controls button {
+  min-height: 40px;
+}
+
+.by-ear-spike .by-ear-log {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--background-secondary);
+  padding: 10px;
+  border-radius: 6px;
+  font-size: var(--font-ui-smaller);
+  min-height: 6em;
+}
