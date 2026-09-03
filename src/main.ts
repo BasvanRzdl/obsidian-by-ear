@@ -8,7 +8,7 @@ export const SPIKE_VIEW = "by-ear-spike";
  * plugin is toggled off and on, so "I already fixed that" and "you are running the old build"
  * look identical from the log. Printing this makes that question answerable in one glance.
  */
-const SPIKE_BUILD = "spike-15 (Test J: the control with no engine in it)";
+const SPIKE_BUILD = "spike-16 (Test J: the control with no engine in it · runs numbered J1–J5)";
 
 /**
  * Phase 0 spike.
@@ -832,16 +832,16 @@ class SpikeView extends ItemView {
         this.tap = null;
       };
 
-      await half("A — default preset (this is Test C)");
+      await half("I1 — default preset (this is Test C)");
       this.write("  … switching. A second of quiet, then the same music again.");
       await sleep(1000);
-      await half("B — block 200 · interval 25", { blockMs: 200, intervalMs: 25 });
+      await half("I2 — block 200 · interval 25", { blockMs: 200, intervalMs: 25 });
 
       this.write(
-        "TEST I done. Two questions, and only your ear can answer either: was B's grain quieter " +
-          "than A's, and did B's attacks — pick, snare, consonant — stay sharp or go soft and " +
-          "watery? A cleaner B with soft attacks is not a win; it is a different setting to find. " +
-          "If B is cleaner and the attacks held, that is the fix, and Phase 1 ships with it."
+        "TEST I done. Two questions, and only your ear can answer either: was I2's grain quieter " +
+          "than I1's, and did I2's attacks — pick, snare, consonant — stay sharp or go soft and " +
+          "watery? A cleaner I2 with soft attacks is not a win; it is a different setting to find. " +
+          "If I2 is cleaner and the attacks held, that is the fix, and Phase 1 ships with it."
       );
     } catch (err) {
       this.write(`TEST I FAIL — ${describe(err)}`);
@@ -877,30 +877,33 @@ class SpikeView extends ItemView {
    *      Apple silicon. "Not CPU" was concluded in Test E by an instrument that has since been
    *      wrong four times.
    *
-   * So this is five twenty-second listens, and no verdict line:
+   * So this is five twenty-second listens, and no verdict line. They are numbered **J1–J5**, not
+   * lettered: a run called "B" in a log that already contains Test B and Test I's B is a report
+   * nobody can read back a week later, and Bas said so the moment he saw it.
    *
-   *   - **A — no engine at all.** The decoded file through a plain `AudioBufferSourceNode` at
+   *
+   *   - **J1 — no engine at all.** The decoded file through a plain `AudioBufferSourceNode` at
    *     `playbackRate` 0.75, looping the same ten seconds, straight to the destination. This
    *     control has never been run in fifteen spikes, and it is the one that can end the
    *     investigation: **if A crackles, the engine was never the problem** and the fault is in the
    *     output path — Electron, the device, or Bluetooth. The pitch drops, because a buffer source
    *     resamples rather than stretches; that is expected and irrelevant to hearing a crackle.
-   *   - **B — the engine at block 200 · interval 25.** Test I's B, repeated as the reference.
-   *   - **C — the same, plus `splitComputation`.** That flag exists precisely to spread one block's
-   *     work across several render quanta instead of doing it all in one. If C is cleaner than B,
+   *   - **J2 — the engine at block 200 · interval 25.** Test I's I2, repeated as the reference.
+   *   - **J3 — the same, plus `splitComputation`.** That flag exists precisely to spread one block's
+   *     work across several render quanta instead of doing it all in one. If J3 is cleaner than J2,
    *     the remaining fault is **missed deadlines**, not the algorithm — and an Intel Mac doing
    *     stereo 8820-point FFTs forty times a second is a plausible place to miss them.
-   *   - **D — block 120 · interval 25.** Well under half the FFT work of B, still 6× less grain than
-   *     the default, and 120 ms of latency instead of 200. If D beats B *on the Mac*, headroom is
+   *   - **J4 — block 120 · interval 25.** Well under half the FFT work of J2, still 6× less grain than
+   *     the default, and 120 ms of latency instead of 200. If J4 beats J2 *on the Mac*, headroom is
    *     worth more than the last of the grain.
-   *   - **E — the same audio rendered offline, then played back.** An `OfflineAudioContext` has no
-   *     deadline: it renders as fast as it can and nothing can underrun. So if E is clean while B
+   *   - **J5 — the same audio rendered offline, then played back.** An `OfflineAudioContext` has no
+   *     deadline: it renders as fast as it can and nothing can underrun. So if J5 is clean while J2
    *     is not, the algorithm is innocent and the fault is real-time scheduling, definitively. And
    *     because the render hands back every sample, this is also the first click detector in the
    *     spike with **100% coverage** rather than a 5% sample — it reports the biggest
    *     sample-to-sample discontinuities and when they happened, next to the loop wraps.
    *
-   * ⚠️ E may simply refuse to run. The engine's `addBuffers` resolves over the worklet's message
+   * ⚠️ J5 may simply refuse to run. The engine's `addBuffers` resolves over the worklet's message
    * port, and an offline context does not pump its audio thread until `startRendering()` — so the
    * setup can deadlock. It is started before the await for that reason, and if it still fails it is
    * reported as **the instrument failing**, not as a finding about the audio.
@@ -935,7 +938,7 @@ class SpikeView extends ItemView {
 
       // ---- A: the control that has never been run. No worklet anywhere in this path.
       this.write(
-        `  ▶ A — no engine at all (plain buffer source, 0.75× resampled, wraps at ${wrap.toFixed(1)} s).` +
+        `  ▶ J1 — no engine at all (plain buffer source, 0.75× resampled, wraps at ${wrap.toFixed(1)} s).` +
           " The pitch drops; that is expected."
       );
       const raw = ctx.createBufferSource();
@@ -949,7 +952,7 @@ class SpikeView extends ItemView {
       await sleep(listen * 1000);
       raw.stop();
       raw.disconnect();
-      this.write("  … A finished. If that crackled, stop here — the engine is not the problem.");
+      this.write("  … J1 finished. If that crackled, stop here — the engine is not the problem.");
       await sleep(1000);
 
       const half = async (
@@ -1009,19 +1012,19 @@ class SpikeView extends ItemView {
         await sleep(1000);
       };
 
-      await half("B — block 200 · interval 25 (Test I's B)", { blockMs: 200, intervalMs: 25 });
-      await half("C — block 200 · interval 25 + splitComputation", {
+      await half("J2 — block 200 · interval 25 (Test I's I2)", { blockMs: 200, intervalMs: 25 });
+      await half("J3 — block 200 · interval 25 + splitComputation", {
         blockMs: 200,
         intervalMs: 25,
         splitComputation: true,
       });
-      await half("D — block 120 · interval 25 (less work per block)", {
+      await half("J4 — block 120 · interval 25 (less work per block)", {
         blockMs: 120,
         intervalMs: 25,
       });
 
       // ---- E: rendered offline, where there is no deadline to miss.
-      this.write("  ▶ E — rendering the same 20 s offline, with no real-time deadline…");
+      this.write("  ▶ J5 — rendering the same 20 s offline, with no real-time deadline…");
       let rendered: AudioBuffer | null = null;
       try {
         const lead = 0.5;
@@ -1051,8 +1054,8 @@ class SpikeView extends ItemView {
         rendered = await this.stage("rendering offline", offline.startRendering(), 120000);
       } catch (err) {
         this.write(
-          `  ⚠️ E could not run — ${describe(err)}. That is the instrument failing, not a finding ` +
-            "about the audio. Judge B, C and D against A without it."
+          `  ⚠️ J5 could not run — ${describe(err)}. That is the instrument failing, not a finding ` +
+            "about the audio. Judge J2, J3 and J4 against J1 without it."
         );
       }
 
@@ -1063,19 +1066,19 @@ class SpikeView extends ItemView {
         play.connect(ctx.destination);
         play.start();
         this.write(
-          "  ▶ E — playing the offline render. Half a second of silence first, then the same music."
+          "  ▶ J5 — playing the offline render. Half a second of silence first, then the same music."
         );
         await sleep((rendered.duration + 0.3) * 1000);
         play.disconnect();
       }
 
       this.write(
-        "TEST J done. A first: a crackle there ends the investigation, because that path has no " +
-          "engine in it. Otherwise — C cleaner than B means missed deadlines and the fix is " +
-          "splitComputation; D cleaner than B means the Intel Mac wants less work per block and we " +
-          "trade the last of the grain for headroom; E clean while B crackles proves the algorithm " +
-          "is innocent and the problem is real-time scheduling. E crackling too points back at the " +
-          "loop, and its click list says where."
+        "TEST J done. J1 first: a crackle there ends the investigation, because that path has no " +
+          "engine in it. Otherwise — J3 cleaner than J2 means missed deadlines and the fix is " +
+          "splitComputation; J4 cleaner than J2 means the Intel Mac wants less work per block and " +
+          "we trade the last of the grain for headroom; J5 clean while J2 crackles proves the " +
+          "algorithm is innocent and the problem is real-time scheduling. J5 crackling too points " +
+          "back at the loop, and its click list says where."
       );
     } catch (err) {
       this.write(`TEST J FAIL — ${describe(err)}`);
@@ -2107,7 +2110,7 @@ function clickReport(buffer: AudioBuffer, wrapEvery: number, lead: number): stri
       steps.push(Math.abs(data[i] - data[i - 1]));
     }
   }
-  if (steps.length === 0) return "E — the render was empty; nothing to inspect.";
+  if (steps.length === 0) return "J5 — the render was empty; nothing to inspect.";
 
   const sorted = Float64Array.from(steps).sort();
   const median = sorted[Math.floor(sorted.length / 2)];
@@ -2131,7 +2134,7 @@ function clickReport(buffer: AudioBuffer, wrapEvery: number, lead: number): stri
     .join(" ");
 
   return (
-    `E — every sample inspected: median step ${median.toFixed(4)}, ` +
+    `J5 — every sample inspected: median step ${median.toFixed(4)}, ` +
     `${found.length} step${found.length === 1 ? "" : "s"} above 8× that` +
     (found.length ? ` · biggest ${biggest}` : "") +
     ` · wraps were due at ${wraps.join(", ") || "never"}`
