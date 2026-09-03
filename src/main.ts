@@ -8,7 +8,7 @@ export const SPIKE_VIEW = "by-ear-spike";
  * plugin is toggled off and on, so "I already fixed that" and "you are running the old build"
  * look identical from the log. Printing this makes that question answerable in one glance.
  */
-const SPIKE_BUILD = "spike-11 (one test at a time · excerpt bug fixed · crackle counted)";
+const SPIKE_BUILD = "spike-12 (Test F: is the crackle the loop seam?)";
 
 /**
  * Phase 0 spike.
@@ -94,6 +94,9 @@ class SpikeView extends ItemView {
     );
     this.button(controls, "Test E — hunt the dropouts (needs a file)", () =>
       this.run("Test E", () => this.testDropouts())
+    );
+    this.button(controls, "Test F — cross the loop seam (needs a file, 90 s)", () =>
+      this.run("Test F", () => this.testLoopSeam())
     );
     this.button(controls, "Stop", () => this.stopAudio());
     this.button(controls, "Reset audio", () => void this.resetAudio());
@@ -348,6 +351,135 @@ class SpikeView extends ItemView {
       `${cents.toFixed(2)}), so cents do work. But the shift is ${off.toFixed(2)} cents off what ` +
       "was asked, which is worth chasing before the pitch control ships."
     );
+  }
+
+  // ---------------------------------------------------------------- test F
+
+  /**
+   * Plays long enough to cross the loop seam, and asks whether that is where the crackle lives.
+   *
+   * The clue is in what Test E *didn't* hear. Six runs, every one of them clean, on the same file
+   * at the same rate and pitch that Bas can plainly hear crackling in Test C. The tests are almost
+   * identical — so look at the difference. **Test E measures for 5.4 seconds. The loop wraps at
+   * 13.3.** Ten seconds of input at 0.75× rate is 13.3 seconds of output, and Test E stops long
+   * before the first one. Test C is the only test that has ever reached a loop point, and it is
+   * the only test that crackles.
+   *
+   * If that is right, the sound is a **click at the seam**, once every 13.3 seconds: the engine
+   * jumps the input from 70 s back to 60 s with no crossfade and no regard for where the waveform
+   * happens to be, and a discontinuity is exactly what a click is. It also means the fault is not
+   * in the WebView, the memory, or the CPU — the three things the last two tests spent an evening
+   * eliminating — but in the loop, and it would sound identical on the Mac.
+   *
+   * So this runs 42 seconds twice, which is three wraps, and the second time **with looping
+   * switched off** (`loopStart === loopEnd` disables it). Same node, same file, same everything
+   * else. If the looped run has spikes and the straight one does not, the seam is the answer.
+   * Rather than counting clicks, it reports **when** the biggest jumps happened, next to the
+   * arithmetic prediction of when the wraps were due — a coincidence in time is the whole proof.
+   */
+  private async testLoopSeam(): Promise<void> {
+    this.write("TEST F — crossing the loop seam. Two 42 s runs, looped then straight.");
+
+    if (!this.picked) {
+      this.write(
+        this.decoding
+          ? "TEST F — the file is still decoding. Wait for the 'decoded in …' line."
+          : "TEST F — nothing to play. Pick a file with Test B first."
+      );
+      new Notice(this.decoding ? "Still decoding — wait a moment." : "Pick a file first (Test B).");
+      return;
+    }
+
+    try {
+      const ctx = await this.stage("resuming the AudioContext", this.audioContext());
+      this.stopAudio();
+
+      const buffer = this.picked.buffer;
+      const from = Math.min(60, Math.max(0, buffer.duration - 60));
+      const loopSeconds = 10;
+      const rate = 0.75;
+      const wrapEvery = loopSeconds / rate;
+
+      const channels: Float32Array[] = [];
+      for (let c = 0; c < buffer.numberOfChannels; c++) channels.push(buffer.getChannelData(c));
+
+      for (const looped of [true, false]) {
+        const node = await this.createStretch(ctx, buffer.numberOfChannels);
+        await this.stage("handing the audio to the worklet", node.addBuffers(channels), 30000);
+
+        const tap = ctx.createAnalyser();
+        tap.fftSize = 2048;
+        node.connect(tap);
+        tap.connect(ctx.destination);
+        this.tap = tap;
+        this.stretch = node;
+
+        node.schedule({
+          output: ctx.currentTime + 0.05,
+          active: true,
+          input: from,
+          rate,
+          semitones: -1,
+          loopStart: looped ? from : 0,
+          loopEnd: looped ? from + loopSeconds : 0,
+        });
+
+        await sleep(600);
+        const started = performance.now();
+        const windows: { at: number; jump: number; peak: number }[] = [];
+        for (let i = 0; i < 1050; i++) {
+          const stats = windowStats(tap);
+          windows.push({ at: (performance.now() - started) / 1000, ...stats });
+          await sleep(40);
+        }
+
+        try {
+          await this.stage("releasing the worklet's audio", node.dropBuffers(), 10000);
+        } catch {
+          /* the measurement is already taken */
+        }
+        node.disconnect();
+        tap.disconnect();
+        this.stretch = null;
+        this.tap = null;
+
+        const jumps = windows.map((w) => w.jump).sort((a, b) => a - b);
+        const medianJump = jumps[Math.floor(jumps.length / 2)];
+        const worst = [...windows].sort((a, b) => b.jump - a.jump).slice(0, 5);
+
+        const label = looped ? `looped (wrap every ${wrapEvery.toFixed(1)} s)` : "straight, no loop";
+        this.write(
+          `  ${label}: median jump ${medianJump.toFixed(4)}, ` +
+            `biggest ${worst.map((w) => `${w.jump.toFixed(3)}@${w.at.toFixed(1)}s`).join(" ")}`
+        );
+
+        if (looped) {
+          // The prediction, made before looking: wraps land at multiples of the loop's output
+          // length. A jump within 0.3 s of one of those is a hit; the window is generous because
+          // the measurement is only sampled every 40 ms and the worklet reports 120 ms of latency.
+          const wraps: number[] = [];
+          for (let w = wrapEvery; w < 42; w += wrapEvery) wraps.push(w);
+          const hits = worst.filter((j) =>
+            wraps.some((w) => Math.abs(j.at - w) < 0.3)
+          ).length;
+          this.write(
+            `  wraps were due at ${wraps.map((w) => w.toFixed(1)).join(" s, ")} s — ` +
+              `${hits} of the 5 biggest jumps landed on one`
+          );
+        }
+      }
+
+      this.write(
+        "TEST F done. Big jumps landing on the wrap times, and a clean straight run, means the " +
+          "crackle is the loop seam — not the WebView, not memory, not CPU, and it would sound " +
+          "the same on the Mac. The fix is a short crossfade at the loop point, which promotes " +
+          "'snap loop edges to zero-crossings' from LATER to a MUST. If both runs look the same, " +
+          "the seam is innocent and the next suspect is simply time: something that degrades after " +
+          "ten seconds of continuous playback."
+      );
+    } catch (err) {
+      this.write(`TEST F FAIL — ${describe(err)}`);
+    }
   }
 
   // ---------------------------------------------------------------- test E
