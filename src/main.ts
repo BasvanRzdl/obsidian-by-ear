@@ -8,7 +8,7 @@ export const SPIKE_VIEW = "by-ear-spike";
  * plugin is toggled off and on, so "I already fixed that" and "you are running the old build"
  * look identical from the log. Printing this makes that question answerable in one glance.
  */
-const SPIKE_BUILD = "spike-7 (pitch measured against the DFT, not the bin grid)";
+const SPIKE_BUILD = "spike-8 (three-way pitch attribution · no un-timed waits · mobile-ready)";
 
 /**
  * Phase 0 spike.
@@ -169,7 +169,10 @@ class SpikeView extends ItemView {
     try {
       const ctx = await this.stage("resuming the AudioContext", this.audioContext());
       const stretch = await this.createStretch(ctx, 1);
-      const latency = await stretch.latency();
+      // Every remote method is a round trip over the worklet's message port, so every one of them
+      // can hang rather than fail if the processor is alive enough to answer `ready` and no more.
+      // On a device we cannot open a console on, an unexplained hang is the worst outcome there is.
+      const latency = await this.stage("asking the worklet its latency", stretch.latency(), 5000);
       this.write(
         "TEST A — engine booted" +
           (Number.isFinite(latency) ? `, worklet latency ${(latency * 1000).toFixed(1)} ms` : "")
@@ -181,7 +184,7 @@ class SpikeView extends ItemView {
       for (let i = 0; i < length; i++) {
         tone[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / ctx.sampleRate);
       }
-      await stretch.addBuffers([tone]);
+      await this.stage("handing the tone to the worklet", stretch.addBuffers([tone]), 10000);
 
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 32768;
@@ -580,6 +583,15 @@ class SpikeView extends ItemView {
     if (!this.ctx) {
       this.ctx = new AudioContext();
       this.write(`AudioContext created at ${this.ctx.sampleRate} Hz`);
+      if (Platform.isMobile) {
+        // Every test here decides PASS by measuring the signal, which means a muted device passes
+        // silently and reads as "the engine is broken" to whoever is holding it. Say so up front,
+        // because on iOS the ring/silent switch really does mute a WebView.
+        this.write(
+          "📱 note: PASS below means the samples are moving, not that you can hear them. " +
+            "If a test passes in silence, check the silent switch and the volume first."
+        );
+      }
     }
     if (this.ctx.state === "suspended") {
       // Worth naming: a suspended context that will not resume means the click was not treated
