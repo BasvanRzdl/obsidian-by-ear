@@ -8,7 +8,7 @@ export const SPIKE_VIEW = "by-ear-spike";
  * plugin is toggled off and on, so "I already fixed that" and "you are running the old build"
  * look identical from the log. Printing this makes that question answerable in one glance.
  */
-const SPIKE_BUILD = "spike-12 (Test F: is the crackle the loop seam?)";
+const SPIKE_BUILD = "spike-13 (Test G: measure the grain, not the gaps)";
 
 /**
  * Phase 0 spike.
@@ -97,6 +97,9 @@ class SpikeView extends ItemView {
     );
     this.button(controls, "Test F — cross the loop seam (needs a file, 90 s)", () =>
       this.run("Test F", () => this.testLoopSeam())
+    );
+    this.button(controls, "Test G — is it the slowdown? (tone, no file needed)", () =>
+      this.run("Test G", () => this.testPurity())
     );
     this.button(controls, "Stop", () => this.stopAudio());
     this.button(controls, "Reset audio", () => void this.resetAudio());
@@ -351,6 +354,166 @@ class SpikeView extends ItemView {
       `${cents.toFixed(2)}), so cents do work. But the shift is ${off.toFixed(2)} cents off what ` +
       "was asked, which is worth chasing before the pitch control ships."
     );
+  }
+
+  // ---------------------------------------------------------------- test G
+
+  /**
+   * Asks Bas's question directly: **is it the slowdown?**
+   *
+   * The loop seam is innocent — Test F put none of its five biggest jumps on a wrap, and the
+   * straight run had the same statistics as the looped one. And the crackle is audible in Test D,
+   * which plays a pure 440 Hz tone at normal speed. So it is not the loop, not memory, not CPU,
+   * not the WebView, and not the music. What is left is the engine itself, and Bas has already
+   * described it better than any of my instruments managed: *"it sounds like it could be due to
+   * the slowdown."*
+   *
+   * That is a testable claim, and it needs the right instrument at last. A phase vocoder does not
+   * fail by going silent or by clicking; it fails by adding **grain** — sidebands, phasiness, a
+   * watery smearing — continuously, in proportion to how hard it is working. Feed it one pure sine
+   * and it should hand back one pure sine, so anything else in the output is what it is adding to
+   * the sound. `tonePurity()` fits the fundamental, subtracts it, and reports the remainder.
+   *
+   * The bypass reading is the floor and comes first, exactly as in Test A: this only means
+   * something as a comparison against a path with no engine in it. Then the settings ladder climbs
+   * from barely-working to Test C's own settings, so the shape of the answer *is* the answer — if
+   * the number is at the floor while doing nothing and climbs with the rate, Bas is right and the
+   * grain is the price of stretching. If it is already high at rate 1.00 with no shift, then the
+   * engine is misconfigured and the rate was never the problem.
+   *
+   * ⚠️ **Run this on the Mac too.** If both machines report the same numbers it is the engine's
+   * quality and not the iPad, which changes what to do about it: bigger blocks, a different
+   * preset, or accepting that this is what free MIT-licensed time-stretching sounds like. If the
+   * iPad is much worse, it is a platform problem and worth chasing further.
+   */
+  private async testPurity(): Promise<void> {
+    this.write("TEST G — how much of the output is not the note? Bypass first, then a rate ladder.");
+
+    try {
+      const ctx = await this.stage("resuming the AudioContext", this.audioContext());
+      this.stopAudio();
+
+      const seconds = 2;
+      const length = Math.floor(ctx.sampleRate * seconds);
+      const tone = new Float32Array(length);
+      for (let i = 0; i < length; i++) {
+        tone[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / ctx.sampleRate);
+      }
+
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 32768;
+      analyser.smoothingTimeConstant = 0;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.15;
+      analyser.connect(gain);
+      gain.connect(ctx.destination);
+
+      const measure = async (): Promise<{ hz: number; junk: number }> => {
+        const reads: { hz: number; junk: number }[] = [];
+        for (let i = 0; i < 3; i++) {
+          const reading = tonePurity(analyser, ctx.sampleRate);
+          if (Number.isFinite(reading.junk)) reads.push(reading);
+          if (i < 2) await sleep(200);
+        }
+        if (reads.length === 0) return { hz: NaN, junk: NaN };
+        reads.sort((a, b) => a.junk - b.junk);
+        return reads[Math.floor(reads.length / 2)];
+      };
+
+      // ---- the floor: our own tone, our own analyser, no engine anywhere.
+      const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+      buffer.copyToChannel(tone, 0);
+      const bypass = ctx.createBufferSource();
+      bypass.buffer = buffer;
+      bypass.loop = true;
+      bypass.connect(analyser);
+      bypass.start();
+      await sleep(900);
+      const floor = await measure();
+      bypass.stop();
+      bypass.disconnect();
+
+      if (!Number.isFinite(floor.junk)) {
+        this.write("TEST G FAIL — the bypass tone read as silence. Nothing below would mean anything.");
+        return;
+      }
+      this.write(
+        `  bypass, no engine: ${floor.junk.toFixed(2)}% not-the-note ← this is the floor`
+      );
+
+      const settings: {
+        label: string;
+        rate: number;
+        semitones: number;
+        configure?: Parameters<StretchNode["configure"]>[0];
+      }[] = [
+        { label: "engine, rate 1.00, no shift", rate: 1, semitones: 0 },
+        { label: "engine, rate 1.00, −1 semitone", rate: 1, semitones: -1 },
+        { label: "engine, rate 0.75, no shift", rate: 0.75, semitones: 0 },
+        { label: "engine, rate 0.75, −1 st ← Test C", rate: 0.75, semitones: -1 },
+        { label: "engine, rate 0.50, no shift", rate: 0.5, semitones: 0 },
+        {
+          label: "rate 0.75, −1 st, 200 ms block",
+          rate: 0.75,
+          semitones: -1,
+          configure: { blockMs: 200, intervalMs: 25 },
+        },
+        {
+          label: "rate 0.75, −1 st, preset cheaper",
+          rate: 0.75,
+          semitones: -1,
+          configure: { preset: "cheaper" },
+        },
+      ];
+
+      for (const setting of settings) {
+        const node = await this.createStretch(ctx, 1);
+        if (setting.configure) node.configure(setting.configure);
+        await this.stage("handing the tone to the worklet", node.addBuffers([tone]), 10000);
+
+        node.connect(analyser);
+        this.stretch = node;
+        node.schedule({
+          output: ctx.currentTime + 0.05,
+          active: true,
+          input: 0,
+          rate: setting.rate,
+          semitones: setting.semitones,
+          loopStart: 0,
+          loopEnd: seconds,
+        });
+
+        await sleep(900);
+        const reading = await measure();
+
+        try {
+          await this.stage("releasing the worklet's audio", node.dropBuffers(), 10000);
+        } catch {
+          /* the measurement is already taken */
+        }
+        node.disconnect();
+        this.stretch = null;
+
+        if (!Number.isFinite(reading.junk)) {
+          this.write(`  ${setting.label}: SILENT — nothing to measure.`);
+          continue;
+        }
+        this.write(
+          `  ${setting.label}: ${reading.junk.toFixed(2)}% not-the-note ` +
+            `(${(reading.junk / floor.junk).toFixed(0)}× the floor) · fundamental ${reading.hz.toFixed(1)} Hz`
+        );
+      }
+
+      this.write(
+        "TEST G done. Climbing with the rate means Bas is right and the grain is the price of " +
+          "stretching — then the question is whether a bigger block buys it back. High already at " +
+          "rate 1.00 with no shift means the engine is misconfigured and the rate was never the " +
+          "problem. ⚠️ Run this on the Mac too: the same numbers on both machines make it the " +
+          "engine's quality rather than the iPad, which is a different decision entirely."
+      );
+    } catch (err) {
+      this.write(`TEST G FAIL — ${describe(err)}`);
+    }
   }
 
   // ---------------------------------------------------------------- test F
@@ -1295,6 +1458,59 @@ function windowStats(analyser: AnalyserNode): { peak: number; jump: number } {
     }
   }
   return { peak, jump };
+}
+
+/**
+ * How much of the output is **not** the note: THD+N, as a percentage of RMS.
+ *
+ * Three instruments have now failed to see what Bas can plainly hear. A level meter cannot see a
+ * click, a jump detector cannot see continuous roughness, and both were tuned for discrete events
+ * in music where the transients are bigger than the fault. His own description — *"it sounds like
+ * it could be due to the slowdown… it seems to be an audio issue"* — describes neither holes nor
+ * pops but **grain**, present throughout, and that has a standard measurement.
+ *
+ * Feed the engine one pure sine and it should return one pure sine. So: find the fundamental,
+ * fit a sinusoid to it by weighted least squares, subtract it, and measure what is left. On a
+ * clean path that residual is a fraction of a percent. Everything above that floor — sidebands,
+ * phasiness, smearing, quantisation, dropped blocks — is what a phase vocoder is adding to the
+ * sound, and it does not need to be discrete to be counted.
+ */
+function tonePurity(analyser: AnalyserNode, sampleRate: number): { hz: number; junk: number } {
+  const hz = toneFrequency(analyser, sampleRate);
+  if (!Number.isFinite(hz)) return { hz: NaN, junk: NaN };
+
+  const samples = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(samples);
+  const n = samples.length;
+
+  const weights = new Float64Array(n);
+  let weightSum = 0;
+  for (let i = 0; i < n; i++) {
+    weights[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)));
+    weightSum += weights[i];
+  }
+
+  let re = 0;
+  let im = 0;
+  for (let i = 0; i < n; i++) {
+    const phase = (2 * Math.PI * hz * i) / sampleRate;
+    re += weights[i] * samples[i] * Math.cos(phase);
+    im += weights[i] * samples[i] * Math.sin(phase);
+  }
+  const cosine = (2 * re) / weightSum;
+  const sine = (2 * im) / weightSum;
+
+  let residual = 0;
+  let total = 0;
+  for (let i = 0; i < n; i++) {
+    const phase = (2 * Math.PI * hz * i) / sampleRate;
+    const fitted = cosine * Math.cos(phase) + sine * Math.sin(phase);
+    const difference = samples[i] - fitted;
+    residual += weights[i] * difference * difference;
+    total += weights[i] * samples[i] * samples[i];
+  }
+
+  return { hz, junk: total > 0 ? 100 * Math.sqrt(residual / total) : NaN };
 }
 
 /** Loudest sample in the analyser's current window. 0 means the node is emitting nothing at all. */
