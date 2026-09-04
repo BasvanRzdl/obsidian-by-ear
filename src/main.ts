@@ -63,7 +63,7 @@ export default class ByEarPlugin extends Plugin {
 	refreshLibrary(): void {
 		for (const leaf of this.app.workspace.getLeavesOfType(PLAYER_VIEW)) {
 			const view = leaf.view;
-			if (view instanceof PlayerView) view.refreshLibrary();
+			if (view instanceof PlayerView) void view.refreshLibrary();
 		}
 	}
 

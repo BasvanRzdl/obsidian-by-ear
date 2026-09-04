@@ -25,9 +25,22 @@ export class Waveform {
 	private ctx2d: CanvasRenderingContext2D;
 	private callbacks: WaveformCallbacks;
 
-	private samples: Float32Array | null = null;
+	/**
+	 * ⚠️ The samples are NOT kept. This is section 8's risk 4, paid off.
+	 *
+	 * Holding the whole mono downmix so the waveform can redraw at any zoom costs **219 MB for the
+	 * 19-minute Woodstock file** -- on an iPad, on top of the copy the worklet holds. Instead a
+	 * min/max pyramid is built once at load and the samples are dropped: about **8 MB** for the same
+	 * file, a 26x saving, and every zoom level is still a straight read rather than a rescan.
+	 *
+	 * The trade is honest and worth stating: the finest level buckets 64 samples, so below roughly
+	 * 1.5 ms per column the picture stops gaining detail. Nothing musical happens at that zoom that
+	 * the ruler and the millisecond-accurate loop readout do not already tell you.
+	 */
+	private pyramid: Float32Array[] = [];
 	private sampleRate = 1;
 	private duration = 0;
+	private totalSamples = 0;
 
 	private viewStart = 0;
 	private viewEnd = 0;
@@ -80,12 +93,13 @@ export class Waveform {
 		this.canvas.removeEventListener("pointerup", this.onPointerUp);
 		this.canvas.removeEventListener("pointercancel", this.onPointerUp);
 		this.canvas.removeEventListener("wheel", this.onWheel);
-		this.samples = null;
+		this.pyramid = [];
 		this.peaks = null;
 	}
 
 	setSong(samples: Float32Array, sampleRate: number, duration: number): void {
-		this.samples = samples;
+		this.pyramid = buildPyramid(samples);
+		this.totalSamples = samples.length;
 		this.sampleRate = sampleRate;
 		this.duration = duration;
 		this.viewStart = 0;
@@ -97,7 +111,8 @@ export class Waveform {
 	}
 
 	clear(): void {
-		this.samples = null;
+		this.pyramid = [];
+		this.totalSamples = 0;
 		this.peaks = null;
 		this.peaksKey = "";
 		this.duration = 0;
@@ -145,7 +160,7 @@ export class Waveform {
 		const ctx = this.ctx2d;
 
 		ctx.clearRect(0, 0, width, height);
-		if (!this.samples || this.duration <= 0) {
+		if (this.pyramid.length === 0 || this.duration <= 0) {
 			this.drawEmpty(width, height);
 			return;
 		}
@@ -173,21 +188,29 @@ export class Waveform {
 		const key = `${width}|${this.viewStart.toFixed(4)}|${this.viewEnd.toFixed(4)}`;
 		if (key === this.peaksKey && this.peaks) return;
 
-		const samples = this.samples!;
 		const peaks = new Float32Array(width * 2);
 		const startSample = Math.max(0, Math.floor(this.viewStart * this.sampleRate));
-		const endSample = Math.min(samples.length, Math.ceil(this.viewEnd * this.sampleRate));
+		const endSample = Math.min(this.totalSamples, Math.ceil(this.viewEnd * this.sampleRate));
 		const perColumn = (endSample - startSample) / width;
 
+		// The coarsest level whose buckets still give at least one bucket per column: reading fewer,
+		// bigger buckets is what keeps a full-song view cheap at any length.
+		let level = 0;
+		while (level + 1 < this.pyramid.length && bucketSize(level + 1) <= perColumn) level++;
+		const size = bucketSize(level);
+		const band = this.pyramid[level];
+		const buckets = band.length / 2;
+
 		for (let x = 0; x < width; x++) {
-			const from = Math.floor(startSample + x * perColumn);
-			const to = Math.max(from + 1, Math.floor(startSample + (x + 1) * perColumn));
+			const from = Math.floor((startSample + x * perColumn) / size);
+			const to = Math.max(from + 1, Math.floor((startSample + (x + 1) * perColumn) / size));
 			let min = 0;
 			let max = 0;
-			for (let i = from; i < to && i < samples.length; i++) {
-				const v = samples[i];
-				if (v < min) min = v;
-				else if (v > max) max = v;
+			for (let b = from; b < to && b < buckets; b++) {
+				const lo = band[b * 2];
+				const hi = band[b * 2 + 1];
+				if (lo < min) min = lo;
+				if (hi > max) max = hi;
 			}
 			peaks[x * 2] = min;
 			peaks[x * 2 + 1] = max;
@@ -328,7 +351,7 @@ export class Waveform {
 	// ------------------------------------------------------------------ interaction
 
 	private onPointerDown = (event: PointerEvent): void => {
-		if (!this.samples) return;
+		if (this.pyramid.length === 0) return;
 		this.canvas.setPointerCapture(event.pointerId);
 		const width = this.canvas.width / dpr();
 		const x = this.eventX(event);
@@ -352,7 +375,7 @@ export class Waveform {
 	};
 
 	private onPointerMove = (event: PointerEvent): void => {
-		if (this.drag === "none" || !this.samples) return;
+		if (this.drag === "none" || this.pyramid.length === 0) return;
 		const width = this.canvas.width / dpr();
 		const x = this.eventX(event);
 		const time = this.xToTime(x, width);
@@ -402,7 +425,7 @@ export class Waveform {
 	 * bar without losing it -- put the cursor on the note, scroll, and it stays put.
 	 */
 	private onWheel = (event: WheelEvent): void => {
-		if (!this.samples) return;
+		if (this.pyramid.length === 0) return;
 		event.preventDefault();
 		const width = this.canvas.width / dpr();
 		const span = this.viewEnd - this.viewStart;
@@ -501,4 +524,58 @@ function formatClock(seconds: number, step: number): string {
 	// Show decimals only once the ruler is fine enough to need them.
 	const decimals = step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
 	return `${m}:${s.toFixed(decimals).padStart(decimals > 0 ? 3 + decimals : 2, "0")}`;
+}
+
+/** Samples per bucket at a pyramid level: 64, 256, 1024, ... */
+export function bucketSize(level: number): number {
+	return PYRAMID_BASE << (2 * level);
+}
+
+export const PYRAMID_BASE = 64;
+
+/**
+ * Builds min/max bands from the samples, coarsest levels folded out of finer ones.
+ *
+ * One pass over the samples for level 0, then each level after that reads a quarter of the previous
+ * one, so the whole structure costs a little over one pass and about 1/24th of the memory the raw
+ * samples took. The caller drops the samples immediately afterwards.
+ */
+export function buildPyramid(samples: Float32Array): Float32Array[] {
+	const levels: Float32Array[] = [];
+	const buckets = Math.max(1, Math.ceil(samples.length / PYRAMID_BASE));
+	const base = new Float32Array(buckets * 2);
+	for (let b = 0; b < buckets; b++) {
+		const from = b * PYRAMID_BASE;
+		const to = Math.min(samples.length, from + PYRAMID_BASE);
+		let min = 0;
+		let max = 0;
+		for (let i = from; i < to; i++) {
+			const v = samples[i];
+			if (v < min) min = v;
+			else if (v > max) max = v;
+		}
+		base[b * 2] = min;
+		base[b * 2 + 1] = max;
+	}
+	levels.push(base);
+
+	// Four buckets of one level make one bucket of the next, until a level is a single screenful.
+	while (levels[levels.length - 1].length / 2 > 512) {
+		const prev = levels[levels.length - 1];
+		const prevBuckets = prev.length / 2;
+		const nextBuckets = Math.ceil(prevBuckets / 4);
+		const next = new Float32Array(nextBuckets * 2);
+		for (let b = 0; b < nextBuckets; b++) {
+			let min = 0;
+			let max = 0;
+			for (let k = b * 4; k < Math.min(prevBuckets, b * 4 + 4); k++) {
+				if (prev[k * 2] < min) min = prev[k * 2];
+				if (prev[k * 2 + 1] > max) max = prev[k * 2 + 1];
+			}
+			next[b * 2] = min;
+			next[b * 2 + 1] = max;
+		}
+		levels.push(next);
+	}
+	return levels;
 }

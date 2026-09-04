@@ -305,3 +305,52 @@ canvas.by-ear-wave {
   resize: vertical;
   font-size: var(--font-ui-small);
 }
+
+/* --- iOS ------------------------------------------------------------------
+ *
+ * Bigger everything. On the desktop a control is hit with a cursor that lands where it is aimed;
+ * on an iPad it is hit with a thumb, half-looked-at, while the other hand is holding a guitar
+ * neck. 44px is Apple's own minimum and it is the right floor here.
+ */
+
+.by-ear-file-input {
+  display: none;
+}
+
+.by-ear-player.is-mobile {
+  gap: 14px;
+  padding: 14px 14px 24px;
+}
+
+.by-ear-player.is-mobile button {
+  min-height: 44px;
+  padding-inline: 14px;
+  font-size: var(--font-ui-medium);
+}
+
+.by-ear-player.is-mobile .by-ear-step {
+  width: 44px;
+}
+
+.by-ear-player.is-mobile .by-ear-chip-x {
+  min-height: 32px;
+}
+
+.by-ear-player.is-mobile .dropdown,
+.by-ear-player.is-mobile .by-ear-filter {
+  min-height: 44px;
+  font-size: var(--font-ui-medium);
+}
+
+.by-ear-player.is-mobile .slider {
+  height: 32px;
+}
+
+.by-ear-player.is-mobile .by-ear-wave-wrap {
+  min-height: 180px;
+}
+
+/* The keyboard legend is meaningless without a keyboard. */
+.by-ear-player.is-mobile .by-ear-keys {
+  display: none;
+}

@@ -5,3 +5,4 @@ main.js
 
 # built by `npm test`, not source
 test/ledger.bundle.mjs
+test/waveform.bundle.mjs

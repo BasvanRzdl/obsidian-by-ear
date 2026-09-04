@@ -3,6 +3,7 @@ import type ByEarPlugin from "../main";
 import { Engine } from "./engine";
 import { Waveform } from "./waveform";
 import { MediaEntry, listMedia, readMedia } from "../media";
+import { KeepAwake, cacheSong, forgetCached, listCached, readCached } from "../mobile";
 import {
 	LEDGER_MARKER,
 	Ledger,
@@ -49,6 +50,8 @@ export class PlayerView extends ItemView {
 	private ledger: Ledger = emptyLedger();
 	private openedAt = 0;
 	private saveTimer = 0;
+	private awake = new KeepAwake();
+	private wasPlaying = false;
 	private filter = "";
 	/** Whether the ledger holds anything not yet on disk. Drives the receipt, nothing else. */
 	private unsaved = false;
@@ -102,11 +105,9 @@ export class PlayerView extends ItemView {
 		// Needed for the keyboard shortcuts to reach us at all.
 		root.tabIndex = 0;
 
-		if (Platform.isMobile) {
-			this.buildMobileNotice(root);
-			return;
-		}
-
+		// The only thing the phone and the desktop disagree about is where bytes come from. Every
+		// row below this one is identical on both, which is the point of MediaEntry.source.
+		if (Platform.isMobile) root.addClass("is-mobile");
 		this.buildLibraryRow(root);
 		this.buildWaveform(root);
 		this.buildTransport(root);
@@ -120,7 +121,7 @@ export class PlayerView extends ItemView {
 		this.registerDomEvent(window, "resize", () => (this.dirty = true));
 		this.engine.onEnded = () => (this.dirty = true);
 
-		this.refreshLibrary();
+		void this.refreshLibrary();
 		this.frame();
 	}
 
@@ -128,6 +129,7 @@ export class PlayerView extends ItemView {
 		await this.closeLedger();
 		if (this.raf) cancelAnimationFrame(this.raf);
 		this.raf = 0;
+		this.awake.destroy();
 		this.waveform?.destroy();
 		this.waveform = null;
 		// Closing the context is the only way to retire the worklet processor -- see engine.ts.
@@ -153,11 +155,57 @@ export class PlayerView extends ItemView {
 	}
 
 	/** Called by the plugin when the media folder changes. */
-	refreshLibrary(): void {
-		const folder = this.plugin.settings.mediaFolder;
-		this.library = folder ? listMedia(folder) : [];
+	async refreshLibrary(): Promise<void> {
+		if (Platform.isMobile) {
+			try {
+				const cached = await listCached();
+				this.library = cached.map((c) => ({
+					name: c.name,
+					path: c.name,
+					bytes: c.bytes,
+					video: c.video,
+					source: "cache" as const,
+				}));
+			} catch (error) {
+				this.library = [];
+				new Notice(`By Ear could not open its song cache: ${message(error)}`);
+			}
+		} else {
+			const folder = this.plugin.settings.mediaFolder;
+			this.library = folder ? listMedia(folder) : [];
+		}
 		this.index = buildIndex(this.app);
 		this.renderPicker();
+	}
+
+	private async addFromFiles(file: File): Promise<void> {
+		this.setStatus(`Copying ${file.name} onto this device…`);
+		try {
+			const entry = await cacheSong(file);
+			await this.refreshLibrary();
+			const added = this.library.find((e) => e.name === entry.name);
+			if (added) await this.openSong(added);
+		} catch (error) {
+			// Quota is the realistic failure: a phone with little space free and a 113 MB video.
+			new Notice(`By Ear could not keep that song: ${message(error)}`);
+			this.setStatus(`Could not add ${file.name} — ${message(error)}`);
+		}
+	}
+
+	private async forgetCurrent(): Promise<void> {
+		const entry = this.current;
+		if (!entry || entry.source !== "cache") return;
+		await this.closeLedger();
+		await forgetCached(entry.name);
+		this.current = null;
+		this.engine.pause();
+		this.engine.setLoop(null, null);
+		this.waveform?.clear();
+		this.duration = 0;
+		await this.refreshLibrary();
+		// The note is untouched on purpose: the media is per-device, the work on the song is not.
+		this.setStatus(`${entry.name} removed from this device. Its note is untouched.`);
+		this.dirty = true;
 	}
 
 	/** The searchable text for one file: its own name plus whatever its note knows about it. */
@@ -173,13 +221,16 @@ export class PlayerView extends ItemView {
 		const folder = this.plugin.settings.mediaFolder;
 
 		picker.empty();
-		if (!folder) {
+		if (!Platform.isMobile && !folder) {
 			picker.createEl("option", { text: "Set a media folder in settings…", value: "" });
 			picker.disabled = true;
 			return;
 		}
 		if (this.library.length === 0) {
-			picker.createEl("option", { text: "No playable files in that folder", value: "" });
+			picker.createEl("option", {
+				text: Platform.isMobile ? "No songs on this device yet — tap Add…" : "No playable files in that folder",
+				value: "",
+			});
 			picker.disabled = true;
 			return;
 		}
@@ -203,17 +254,6 @@ export class PlayerView extends ItemView {
 	}
 
 	// ------------------------------------------------------------------ layout
-
-	private buildMobileNotice(root: HTMLElement): void {
-		const box = root.createDiv({ cls: "by-ear-empty" });
-		box.createEl("h3", { text: "By Ear runs on the desktop for now" });
-		box.createEl("p", {
-			text:
-				"The engine, the waveform and the loop all work — but reading songs on iPad and " +
-				"iPhone goes through the Files picker rather than off disk, and that is the next " +
-				"phase of the build. Nothing is broken; it just is not wired up yet.",
-		});
-	}
 
 	private buildLibraryRow(root: HTMLElement): void {
 		const row = root.createDiv({ cls: "by-ear-row by-ear-library" });
@@ -243,10 +283,35 @@ export class PlayerView extends ItemView {
 		});
 		this.el.picker = picker;
 
+		if (Platform.isMobile) {
+			/*
+			 * One song arrives once, through the Files picker, and is kept in IndexedDB afterwards.
+			 * There is no path to resolve on iOS and no `fs` to resolve it with -- but re-picking a
+			 * song every session would make the plugin unusable, which is what the cache is for.
+			 */
+			const chooser = row.createEl("input", {
+				type: "file",
+				cls: "by-ear-file-input",
+				attr: { accept: "audio/*,video/*", "aria-label": "Add a song from Files" },
+			});
+			const add = row.createEl("button", { text: "Add…", attr: { "aria-label": "Add a song from Files" } });
+			add.addEventListener("click", () => chooser.click());
+			chooser.addEventListener("change", () => {
+				const file = chooser.files?.[0];
+				chooser.value = "";
+				if (file) void this.addFromFiles(file);
+			});
+
+			const forget = row.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Remove this song from the device" } });
+			setIcon(forget, "trash-2");
+			forget.addEventListener("click", () => void this.forgetCurrent());
+			return;
+		}
+
 		const rescan = row.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Re-scan folder" } });
 		setIcon(rescan, "refresh-cw");
 		rescan.addEventListener("click", () => {
-			this.refreshLibrary();
+			void this.refreshLibrary();
 			this.setStatus(`${this.library.length} file(s) in the folder.`);
 		});
 	}
@@ -511,7 +576,7 @@ export class PlayerView extends ItemView {
 		await this.closeLedger();
 		this.setStatus(`Reading ${entry.name}…`);
 		try {
-			const bytes = readMedia(entry.path);
+			const bytes = entry.source === "cache" ? await readCached(entry.name) : readMedia(entry.path);
 			const started = performance.now();
 			const song = await this.engine.load(bytes, entry.name);
 			this.current = entry;
@@ -910,6 +975,12 @@ export class PlayerView extends ItemView {
 	private frame = (): void => {
 		this.raf = requestAnimationFrame(this.frame);
 		const playing = this.engine.transport.playing;
+		if (playing !== this.wasPlaying) {
+			this.wasPlaying = playing;
+			// An iPad that sleeps mid-loop is a broken tool: nothing touches the screen while both
+			// hands are on the guitar.
+			void this.awake.want(playing);
+		}
 		if (playing) this.engine.tick();
 		if (!playing && !this.dirty) return;
 		this.dirty = false;
@@ -1000,4 +1071,8 @@ function formatTime(seconds: number): string {
 	const m = Math.floor(seconds / 60);
 	const s = seconds - m * 60;
 	return `${m}:${s.toFixed(3).padStart(6, "0")}`;
+}
+
+function message(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

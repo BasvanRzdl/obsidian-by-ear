@@ -18,9 +18,15 @@ export const VIDEO_EXTENSIONS = [".mp4", ".m4v", ".mov", ".webm"];
 
 export interface MediaEntry {
 	name: string;
+	/** A filesystem path on desktop; the name again on iOS, where there is no path to have. */
 	path: string;
 	bytes: number;
 	video: boolean;
+	/**
+	 * Where the bytes come from. The rest of the player must not care: the picker, the ledger, the
+	 * waveform and the engine all work in `MediaEntry`, and only `openSong` looks at this.
+	 */
+	source: "disk" | "cache";
 }
 
 interface NodeFs {
@@ -80,7 +86,7 @@ export function listMedia(folder: string): MediaEntry[] {
 		try {
 			const stat = fs.statSync(path);
 			if (!stat.isFile()) continue;
-			entries.push({ name, path, bytes: stat.size, video });
+			entries.push({ name, path, bytes: stat.size, video, source: "disk" });
 		} catch {
 			// An iCloud file that is evicted rather than downloaded still stats fine, so a failure
 			// here is a real one -- a permission or a race. Skip it rather than break the list.
