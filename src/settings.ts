@@ -1,0 +1,78 @@
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import type ByEarPlugin from "./main";
+import { folderExists, listMedia, suggestedICloudFolder } from "./media";
+
+export interface ByEarSettings {
+	/**
+	 * Where the songs are. Deliberately empty by default and never derived from the vault: this
+	 * plugin is public, and one person's iCloud layout is a configuration, not a design.
+	 */
+	mediaFolder: string;
+}
+
+export const DEFAULT_SETTINGS: ByEarSettings = {
+	mediaFolder: "",
+};
+
+export class ByEarSettingTab extends PluginSettingTab {
+	plugin: ByEarPlugin;
+
+	constructor(app: App, plugin: ByEarPlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+	display(): void {
+		const { containerEl } = this;
+		containerEl.empty();
+
+		new Setting(containerEl)
+			.setName("Media folder")
+			.setDesc(
+				"Absolute path to the folder holding your songs. Keep it outside the vault: " +
+					"Obsidian Sync caps files at 5 MB, and songs are much bigger than that."
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("/Users/you/…/Music/By Ear")
+					.setValue(this.plugin.settings.mediaFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.mediaFolder = value.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		const suggestion = suggestedICloudFolder();
+		if (suggestion && suggestion !== this.plugin.settings.mediaFolder) {
+			new Setting(containerEl)
+				.setName("Found an iCloud Drive folder")
+				.setDesc(suggestion)
+				.addButton((button) =>
+					button.setButtonText("Use this").onClick(async () => {
+						this.plugin.settings.mediaFolder = suggestion;
+						await this.plugin.saveSettings();
+						this.display();
+					})
+				);
+		}
+
+		const folder = this.plugin.settings.mediaFolder;
+		const status = containerEl.createEl("p", { cls: "by-ear-settings-status" });
+		if (!folder) {
+			status.setText("No folder set yet.");
+		} else if (!folderExists(folder)) {
+			status.setText("That folder does not exist, or this is the mobile app (which cannot read disk).");
+		} else {
+			const found = listMedia(folder).length;
+			status.setText(`${found} playable file${found === 1 ? "" : "s"} found.`);
+		}
+
+		new Setting(containerEl).addButton((button) =>
+			button.setButtonText("Re-scan folder").onClick(() => {
+				this.plugin.refreshLibrary();
+				new Notice("By Ear: folder re-scanned.");
+				this.display();
+			})
+		);
+	}
+}

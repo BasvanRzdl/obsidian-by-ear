@@ -1,42 +1,179 @@
-.by-ear-spike .by-ear-muted {
-  color: var(--text-muted);
-}
+/*
+ * By Ear.
+ *
+ * Everything is expressed in Obsidian's own theme variables so the player wears whatever theme the
+ * vault is wearing. The six --by-ear-* variables below are read by the canvas at resize time, so a
+ * theme (or a snippet) can restyle the waveform without touching this plugin.
+ */
 
-.by-ear-spike table.by-ear-env {
-  width: 100%;
-  margin-bottom: 1em;
-}
+.by-ear-player {
+  --by-ear-wave: var(--text-normal);
+  --by-ear-wave-dim: var(--text-faint);
+  --by-ear-playhead: var(--color-orange);
+  --by-ear-loop: rgba(125, 165, 255, 0.14);
+  --by-ear-loop-edge: var(--color-blue);
+  --by-ear-axis: var(--text-faint);
 
-.by-ear-spike table.by-ear-env td {
-  padding: 2px 8px 2px 0;
-  vertical-align: top;
-  font-size: var(--font-ui-small);
-}
-
-.by-ear-spike table.by-ear-env td:first-child {
-  color: var(--text-muted);
-  white-space: nowrap;
-  width: 9em;
-}
-
-.by-ear-spike .by-ear-controls {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  align-items: flex-start;
-  margin-bottom: 1em;
+  gap: 10px;
+  padding: 12px 14px 18px;
+  outline: none;
 }
 
-.by-ear-spike .by-ear-controls button {
-  min-height: 40px;
+.by-ear-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.by-ear-spike .by-ear-log {
-  white-space: pre-wrap;
-  word-break: break-word;
+.by-ear-library select {
+  flex: 1 1 auto;
+  min-width: 12em;
+}
+
+/* --- waveform ------------------------------------------------------------ */
+
+.by-ear-wave-wrap {
+  position: relative;
+  width: 100%;
+  height: 190px;
   background: var(--background-secondary);
-  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
+  overflow: hidden;
+}
+
+canvas.by-ear-wave {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* A crosshair says "this surface is a timeline", which is exactly what it is. */
+  cursor: crosshair;
+  touch-action: none;
+}
+
+/* --- transport ----------------------------------------------------------- */
+
+.by-ear-transport button.by-ear-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
+.by-ear-clock {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  margin-left: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.by-ear-spacer {
+  flex: 1 1 auto;
+}
+
+.by-ear-loops button.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.by-ear-loop-readout {
+  font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
-  min-height: 6em;
+  color: var(--text-muted);
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- tempo and pitch ----------------------------------------------------- */
+
+.by-ear-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.by-ear-knob {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 190px;
+}
+
+.by-ear-knob-label {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.by-ear-knob-value {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  font-variant-numeric: tabular-nums;
+}
+
+.by-ear-knob input[type="range"] {
+  width: 100%;
+}
+
+/* --- status and legend --------------------------------------------------- */
+
+.by-ear-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 8px;
+}
+
+.by-ear-meter {
+  font-family: var(--font-monospace);
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
+.by-ear-keys summary {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.by-ear-keys dl {
+  display: grid;
+  grid-template-columns: 7em 1fr;
+  gap: 2px 12px;
+  margin: 8px 0 0;
+  font-size: var(--font-ui-smaller);
+}
+
+.by-ear-keys dt {
+  font-family: var(--font-monospace);
+  color: var(--text-normal);
+}
+
+.by-ear-keys dd {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.by-ear-empty {
+  padding: 24px;
+  max-width: 34em;
+  color: var(--text-muted);
+}
+
+.by-ear-settings-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
 }

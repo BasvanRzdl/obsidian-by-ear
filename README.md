@@ -4,9 +4,11 @@ An Obsidian plugin for learning songs by ear: loop a passage, slow it down, shif
 semitones **and cents**, watch the player's hands — and keep what you worked out in a note
 instead of locked inside an app.
 
-> **Status: Phase 0.** This repository currently contains a *spike* — a measuring instrument that
-> answers three questions which would kill the project if the answer were no. There is no player
-> yet. Don't install this expecting one.
+> **Status: Phase 1 — a working audio player on the desktop.** Waveform, transport, A→B looping,
+> tempo and pitch all work on macOS. Video is not shown yet (its *sound* plays fine), the song
+> notes are not written yet, and mobile is not wired up — those are Phases 2, 3 and 4. The Phase 0
+> spike that proved the engine viable is preserved at the `phase-0-spike` tag; the two hazard
+> notes it produced are further down this file and are still load-bearing.
 
 ## Why
 
@@ -21,16 +23,21 @@ roots, the tuning, the bar you still can't name. That belongs in text, on every 
 
 Obsidian already runs on all of them, and already syncs. So the player goes there.
 
-## What it will do
+## What works today
 
-- Load audio or video from wherever you keep it — on desktop straight off disk, on iOS through
-  the Files picker, so iCloud Drive works
-- Waveform, drag to set an A→B loop, nudge the edges to the millisecond
+- Load audio **or the soundtrack of a video** straight off disk, from a folder you point it at
+- Waveform with zoom, click to seek, drag to set an A→B loop, nudge the edges by 10 ms
 - Tempo 25–150%, pitch-preserving
 - Pitch shift **independent of tempo**, in semitones *and* cents
-- Video, kept in sync by slaving the picture to the audio clock
+- Everything on the keyboard, so your hands stay near the guitar
+
+## What is still coming
+
+- The picture, kept in sync by slaving the video to the audio clock
 - Named marks and saved loops, written into the song's own note as plain markdown
 - A sitting log, so you can see what you actually worked on
+- iPad and iPhone, through the Files picker, so iCloud Drive works there too
+- Call & response, Step-It-Up, and a channel mixer
 
 ## What it will never do
 
@@ -48,23 +55,42 @@ These are deliberate, and they are the point of the project rather than missing 
 
 | | |
 |---|---|
-| macOS (Intel and Apple Silicon) | intended |
-| iPadOS / iOS | intended, and the main reason this exists |
+| macOS (Intel and Apple Silicon) | **working** |
+| iPadOS / iOS | Phase 4 — the engine is proven there, the file path is not wired up yet. It is also the main reason this exists |
 | Windows / Linux | should work, untested |
 | **Android** | ⚠️ **probably not.** Obsidian audio plugins are reported not to work on Android because of WebView limitations. This is unverified by me and I have no Android device to test on. |
 
-## Running the spike
+## Installing it
 
 ```bash
 npm install
 ./install.sh                       # or: ./install.sh "/path/to/your/vault"
 ```
 
-Then in Obsidian: **Settings → Community plugins → refresh**, enable **By Ear**, and open
-*By Ear — spike* from the ribbon or the command palette.
+Then in Obsidian: **Settings → Community plugins → refresh**, enable **By Ear**, and set the
+**media folder** in its settings to wherever your songs live. Keep that folder *outside* the vault
+— Obsidian Sync caps files at 5 MB and songs are much bigger — and open the player from the
+headphones icon in the ribbon.
 
-It measures five things, on whatever device you run it on. Only the first three were planned. The
-last two were found the hard way, which is rather the point of a spike:
+### Keyboard
+
+| | |
+|---|---|
+| `space` | play / pause |
+| `←` `→` | nudge 1 s (shift: 5 s) |
+| `A` `B` | set the loop start / end at the playhead |
+| `L` / `X` | loop on-off / clear the loop |
+| `[` `]` | nudge A by 10 ms (shift: nudge B) |
+| `↑` `↓` | tempo ± 5% |
+| `-` `=` | pitch ± 1 semitone (shift: ± 10 cents) |
+| `0` | reset tempo and pitch |
+| wheel | zoom around the pointer (shift: pan) |
+
+## What the spike settled
+
+The Phase 0 spike lives at the `phase-0-spike` tag. It measured five things, on whatever device it
+was run on. Only the first three were planned; the last two were found the hard way, which is
+rather the point of a spike:
 
 1. **Does an AudioWorklet carrying inlined WASM boot inside Obsidian's WebView?** The engine
    builds its worklet from a `blob:` URL, which a strict content-security policy could block.
@@ -77,14 +103,54 @@ last two were found the hard way, which is rather the point of a spike:
    including a 403 s file. Note what that costs though: decoded to float samples it was **155 MB
    resident**, so caching, not decoding, is the real mobile problem.
 4. **Can a node be re-tuned while it is playing?** Every pitch drag and tempo nudge is a
-   `schedule()` on a node already making sound. Desktop says yes. On iPadOS a second `schedule()`
-   produced silence, which would mean parameters can be set once and never changed — not a player.
-   Test D asks it directly, four ways.
+   `schedule()` on a node already making sound. If not, parameters could be set once and never
+   changed, which is not a player. ✅ **Answered: yes** — four ways out of four on iPadOS (50 ms
+   ahead, 300 ms ahead, an explicit `outputTime`, and `stop()`/`start()`), landing within 6 cents
+   of a requested octave every time.
 5. **Which `numberOfInputs` does this engine need?** ✅ **Answered: 1**, even though nothing is ever
    connected to that input. Obsidian agrees with the browser after all — the run that seemed to say
    otherwise was hitting the build hazard below. See the second hazard note for the mechanism. The
    spike no longer probes: a probe could only detect a *boot* failure, and zero inputs boots
    perfectly and then plays silence.
+
+### ⚠️ The configuration, for anyone else using Signalsmith Stretch
+
+```js
+stretch.configure({ blockMs: 200, intervalMs: 25, splitComputation: true });
+```
+
+Those three numbers were arrived at by measurement, not taste, and the library's defaults are not
+close to them.
+
+**`intervalMs` is the quality knob.** It defaults to `blockMs * 0.25`, which is far too coarse.
+Feeding the engine one pure 440 Hz sine and measuring what came back, against a 0.001% bypass
+floor: the default read **0.272%** THD+N on an Intel Mac and **0.445%** on an iPad. Dropping the
+interval to 25 ms alone is **6.6× cleaner at zero latency cost**; adding the 200 ms block buys
+another 1.8× for 80 ms. A pitch error of about +5 cents that looked like a separate defect turned
+out to be the same misconfiguration — it falls to +0.42 cents with the same change, because the hop
+was too coarse to resynthesise the phase correctly.
+
+**`splitComputation` is the dropout knob, and no preset can reach it.** Without it the whole
+block's FFT is computed inside a single 128-frame render quantum — a 2.9 ms budget at 44.1 kHz. A
+desktop i5 finishes in time; the iPad's WebView does not, the device is handed nothing, and that
+gap is an audible crackle. The library only reads the flag on the `blockMs` branch, so the default
+configuration is spiky by construction. Cost of switching it on: 25 ms of latency.
+
+And **never `preset: 'cheaper'`** — it measured 10× worse than the default.
+
+### ⚠️ The leaked-processor hazard, for anyone building nodes at runtime
+
+`process()` returns `true` unconditionally, which sets the processor's active-source flag. The spec
+then requires the browser to retain the node **and keep calling it with no inputs connected**
+([web-audio-api#2658](https://github.com/WebAudio/web-audio-api/issues/2658), open, reproduced in
+Chrome and Firefox). `disconnect()` does not stop it. Dropping the reference does not stop it.
+`schedule({active: false})` does not stop it either — the inactive branch still calls `_process()`.
+**Only closing the `AudioContext` does.**
+
+So build **one node for the life of a session** and re-`configure()`/`re-schedule()` it, rather
+than building one per parameter change. Left alone this degrades a long session silently, and it is
+why an audible fault looked random for an evening: the same code sounded clean on one run and
+crackled on the next, because every button press left another processor running.
 
 ### ⚠️ The silent-processor hazard, for anyone driving this engine
 
