@@ -267,8 +267,32 @@ canvas.by-ear-wave {
 }
 
 .by-ear-ledger-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
+}
+
+.by-ear-ledger-head .by-ear-note-link {
+  flex: 1 1 auto;
+}
+
+.by-ear-save {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+
+.by-ear-save-state {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.by-ear-save-state.is-pending {
+  color: var(--text-accent);
 }
 
 .by-ear-note-how {

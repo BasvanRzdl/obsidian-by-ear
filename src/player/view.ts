@@ -4,6 +4,7 @@ import { Engine } from "./engine";
 import { Waveform } from "./waveform";
 import { MediaEntry, listMedia, readMedia } from "../media";
 import {
+	LEDGER_MARKER,
 	Ledger,
 	NoteIndex,
 	NoteMatch,
@@ -49,6 +50,8 @@ export class PlayerView extends ItemView {
 	private openedAt = 0;
 	private saveTimer = 0;
 	private filter = "";
+	/** Whether the ledger holds anything not yet on disk. Drives the receipt, nothing else. */
+	private unsaved = false;
 
 	private raf = 0;
 	private dirty = true;
@@ -70,6 +73,7 @@ export class PlayerView extends ItemView {
 		noteLink: null as HTMLElement | null,
 		marks: null as HTMLElement | null,
 		findings: null as HTMLTextAreaElement | null,
+		saveState: null as HTMLElement | null,
 	};
 
 	constructor(leaf: WorkspaceLeaf, plugin: ByEarPlugin) {
@@ -439,6 +443,22 @@ export class PlayerView extends ItemView {
 		const head = wrap.createDiv({ cls: "by-ear-ledger-head" });
 		this.el.noteLink = head.createSpan({ cls: "by-ear-note-link", text: "" });
 
+		/*
+		 * A save button, and a receipt saying when it last happened.
+		 *
+		 * The writing already worked without either -- but it wrote to the bottom of a long chart,
+		 * below a collapsed lyrics callout, and said nothing. Bas typed, looked at the chart, saw
+		 * nothing, and reasonably concluded it was broken. A write you cannot see is the same
+		 * problem as a meter you cannot see: it looks like a failure, or worse, like a success.
+		 */
+		const save = head.createEl("button", {
+			text: "Save",
+			cls: "by-ear-save",
+			attr: { "aria-label": "Write the ledger to the note now (Cmd/Ctrl+S)" },
+		});
+		save.addEventListener("click", () => void this.saveLedger());
+		this.el.saveState = head.createSpan({ cls: "by-ear-save-state", text: "" });
+
 		const findings = wrap.createEl("textarea", {
 			cls: "by-ear-findings",
 			attr: { placeholder: "What you are hearing — written straight into the song's note.", rows: "3" },
@@ -464,6 +484,7 @@ export class PlayerView extends ItemView {
 		const keys: [string, string][] = [
 			["space", "play / pause"],
 			["← →", "nudge 1 s  (shift: 5 s)"],
+			["⌘/ctrl S", "save the ledger to the note"],
 			["M", "drop a mark here"],
 			["S", "loop this section (mark to mark)"],
 			["A / B", "set loop start / end at the playhead"],
@@ -709,11 +730,23 @@ export class PlayerView extends ItemView {
 		const how = { media: "bound", chart: "chart", study: "study", byear: "by-ear note" }[this.note.how];
 		el.createSpan({ text: "writing to " });
 		const link = el.createEl("a", { text: this.note.file.basename, href: "#" });
+		// Opens *at the ledger*, not at the top. On a chart the ledger is below the lyrics callout,
+		// which is a long way down -- landing at line 1 is what made it look like nothing happened.
 		link.addEventListener("click", (event) => {
 			event.preventDefault();
-			if (this.note) void this.app.workspace.getLeaf("tab").openFile(this.note.file);
+			void this.revealLedger();
 		});
 		el.createSpan({ cls: "by-ear-note-how", text: `  (${how})` });
+	}
+
+	private async revealLedger(): Promise<void> {
+		if (!this.note) return;
+		const file = this.note.file;
+		const content = await this.app.vault.read(file);
+		const at = content.indexOf(LEDGER_MARKER);
+		const line = at < 0 ? 0 : content.slice(0, at).split("\n").length;
+		const leaf = this.app.workspace.getLeaf("tab");
+		await leaf.openFile(file, { eState: { line } });
 	}
 
 	/**
@@ -722,7 +755,16 @@ export class PlayerView extends ItemView {
 	 * The note may be open in an editor and syncing to an iPad at the same time, and `vault.process`
 	 * rewrites the whole file. Debouncing keeps that to once per thought instead of once per letter.
 	 */
+	private renderSaveState(text: string, pending: boolean): void {
+		const el = this.el.saveState;
+		if (!el) return;
+		el.setText(text);
+		el.toggleClass("is-pending", pending);
+	}
+
 	private queueSave(): void {
+		this.unsaved = true;
+		this.renderSaveState("unsaved…", true);
 		if (this.saveTimer) window.clearTimeout(this.saveTimer);
 		this.saveTimer = window.setTimeout(() => void this.saveLedger(), 1000);
 	}
@@ -735,7 +777,12 @@ export class PlayerView extends ItemView {
 		this.ledger.semitones = this.engine.transport.semitones;
 		try {
 			await writeLedger(this.app, this.note.file, this.ledger);
+			this.unsaved = false;
+			const now = new Date();
+			const time = `${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`;
+			this.renderSaveState(`saved ${time} → ${this.note.file.basename}`, false);
 		} catch (error) {
+			this.renderSaveState("could not save", true);
 			new Notice(`By Ear could not write the note: ${error instanceof Error ? error.message : error}`);
 		}
 	}
@@ -764,6 +811,14 @@ export class PlayerView extends ItemView {
 
 	private onKeyDown = (event: KeyboardEvent): void => {
 		const target = event.target as HTMLElement | null;
+
+		// Before every focus guard below: the moment he most wants to save is while typing in the
+		// findings box, and that is exactly the case the guards bail out of.
+		if ((event.metaKey || event.ctrlKey) && (event.key === "s" || event.key === "S")) {
+			event.preventDefault();
+			void this.saveLedger();
+			return;
+		}
 		// Let a focused slider keep its own arrow keys.
 		if (target && target.tagName === "INPUT" && (target as HTMLInputElement).type === "range") {
 			if (event.key.startsWith("Arrow")) return;
