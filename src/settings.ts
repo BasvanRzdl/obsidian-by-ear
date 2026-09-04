@@ -8,10 +8,16 @@ export interface ByEarSettings {
 	 * plugin is public, and one person's iCloud layout is a configuration, not a design.
 	 */
 	mediaFolder: string;
+	/**
+	 * Where a *new* by-ear note goes -- used only when a song has neither a Songbook chart nor a
+	 * study note. Vault-relative. Two of seventeen songs need it today.
+	 */
+	noteFolder: string;
 }
 
 export const DEFAULT_SETTINGS: ByEarSettings = {
 	mediaFolder: "",
+	noteFolder: "By Ear",
 };
 
 export class ByEarSettingTab extends PluginSettingTab {
@@ -38,6 +44,22 @@ export class ByEarSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.mediaFolder)
 					.onChange(async (value) => {
 						this.plugin.settings.mediaFolder = value.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Folder for new song notes")
+			.setDesc(
+				"Vault-relative. Only used when a song has no note yet — if it is already in your " +
+					"songbook or has a study note, the ledger is written into that note instead."
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("By Ear")
+					.setValue(this.plugin.settings.noteFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.noteFolder = value.trim();
 						await this.plugin.saveSettings();
 					})
 			);

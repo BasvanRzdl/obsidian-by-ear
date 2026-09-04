@@ -12,6 +12,7 @@
   --by-ear-playhead: var(--color-orange);
   --by-ear-loop: rgba(125, 165, 255, 0.14);
   --by-ear-loop-edge: var(--color-blue);
+  --by-ear-mark: var(--color-yellow);
   --by-ear-axis: var(--text-faint);
 
   display: flex;
@@ -194,4 +195,89 @@ canvas.by-ear-wave {
 .by-ear-settings-status {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
+}
+
+/* --- filter, marks and the ledger pane ------------------------------------ */
+
+.by-ear-filter {
+  flex: 0 1 16em;
+  min-width: 8em;
+}
+
+.by-ear-marks-row {
+  align-items: flex-start;
+}
+
+.by-ear-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1 1 auto;
+}
+
+.by-ear-marks-empty {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  align-self: center;
+}
+
+.by-ear-chip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 2px 1px 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-secondary);
+}
+
+.by-ear-chip-name {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  height: auto;
+  width: 7em;
+  font-size: var(--font-ui-smaller);
+}
+
+.by-ear-chip-name:focus {
+  box-shadow: none;
+  outline: none;
+}
+
+.by-ear-chip-x {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 0 4px;
+  height: auto;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.by-ear-chip-x:hover {
+  color: var(--text-error);
+}
+
+.by-ear-ledger {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.by-ear-ledger-head {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.by-ear-note-how {
+  color: var(--text-faint);
+}
+
+.by-ear-findings {
+  width: 100%;
+  min-height: 4em;
+  resize: vertical;
+  font-size: var(--font-ui-small);
 }

@@ -1,11 +1,12 @@
 {
 	"name": "obsidian-by-ear",
-	"version": "0.1.2",
+	"version": "0.2.0",
 	"description": "An Obsidian plugin for learning songs by ear.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
-		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "esbuild src/ledger.ts --bundle --format=esm --outfile=test/ledger.bundle.mjs --alias:obsidian=./test/obsidian-stub.mjs --log-level=error && node test/ledger.test.mjs"
 	},
 	"keywords": [
 		"obsidian",

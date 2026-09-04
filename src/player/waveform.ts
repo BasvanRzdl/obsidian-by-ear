@@ -37,6 +37,8 @@ export class Waveform {
 	private peaksKey = "";
 
 	private playhead = 0;
+	/** Named points the user dropped. Drawn, never edited here -- the view owns them. */
+	private marks: { time: number; name: string }[] = [];
 	private loopA: number | null = null;
 	private loopB: number | null = null;
 	private looping = false;
@@ -53,6 +55,7 @@ export class Waveform {
 		playhead: "#e05a2b",
 		loop: "rgba(120, 170, 255, 0.16)",
 		loopEdge: "#7aa8ff",
+		mark: "#c9a227",
 		axis: "#666",
 		text: "#999",
 	};
@@ -151,6 +154,7 @@ export class Waveform {
 		this.drawPeaks(width, height);
 		this.drawLoop(width, height);
 		this.drawRuler(width, height);
+		this.drawMarks(width, height);
 		this.drawPlayhead(width, height);
 	}
 
@@ -263,6 +267,50 @@ export class Waveform {
 			ctx.fillText(formatClock(t, step), x + 3, height - 3);
 		}
 		ctx.globalAlpha = 1;
+	}
+
+	setMarks(marks: { time: number; name: string }[]): void {
+		this.marks = marks;
+	}
+
+	/**
+	 * Marks are drawn as thin full-height ticks with the name beside them, deliberately in a
+	 * different colour from the loop edges: a mark and a loop edge are different kinds of thing and
+	 * must never be confused at a glance while playing.
+	 */
+	private drawMarks(width: number, height: number): void {
+		if (this.marks.length === 0) return;
+		const ctx = this.ctx2d;
+		ctx.save();
+		ctx.font = "10px var(--font-interface, sans-serif)";
+		ctx.textBaseline = "top";
+		for (const mark of this.marks) {
+			if (mark.time < this.viewStart || mark.time > this.viewEnd) continue;
+			const x = Math.round(this.timeToX(mark.time, width)) + 0.5;
+			ctx.strokeStyle = this.colors.mark;
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(x, 0);
+			ctx.lineTo(x, height);
+			ctx.stroke();
+
+			ctx.fillStyle = this.colors.mark;
+			ctx.beginPath();
+			ctx.moveTo(x, 0);
+			ctx.lineTo(x + 7, 0);
+			ctx.lineTo(x, 7);
+			ctx.closePath();
+			ctx.fill();
+
+			if (mark.name) {
+				// Flip the label to the left near the right edge so it never runs off the canvas.
+				const w = ctx.measureText(mark.name).width;
+				const left = x + 10 + w > width;
+				ctx.textAlign = left ? "right" : "left";
+				ctx.fillText(mark.name, left ? x - 4 : x + 4, 9);
+			}
+		}
+		ctx.restore();
 	}
 
 	private drawPlayhead(width: number, height: number): void {
@@ -426,6 +474,7 @@ export class Waveform {
 			playhead: pick("--by-ear-playhead", this.colors.playhead),
 			loop: pick("--by-ear-loop", this.colors.loop),
 			loopEdge: pick("--by-ear-loop-edge", this.colors.loopEdge),
+			mark: pick("--by-ear-mark", this.colors.mark),
 			axis: pick("--by-ear-axis", this.colors.axis),
 			text: pick("--by-ear-axis", this.colors.text),
 		};

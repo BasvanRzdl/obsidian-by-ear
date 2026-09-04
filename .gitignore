@@ -2,3 +2,6 @@ node_modules/
 main.js
 *.js.map
 .DS_Store
+
+# built by `npm test`, not source
+test/ledger.bundle.mjs

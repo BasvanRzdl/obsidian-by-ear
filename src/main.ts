@@ -18,6 +18,26 @@ export default class ByEarPlugin extends Plugin {
 			callback: () => void this.openPlayer(),
 		});
 
+		/*
+		 * obsidian://by-ear?song=<media file name>&t=<seconds>
+		 *
+		 * The one door into this plugin from outside it. A timestamp in a note becomes a link that
+		 * opens the player at that moment -- and it is what a music dashboard would click to start
+		 * a song, which is why it ships here rather than later.
+		 */
+		this.registerObsidianProtocolHandler("by-ear", async (params) => {
+			await this.openPlayer();
+			const song = params.song ?? params.file;
+			if (!song) return;
+			const at = Number(params.t);
+			for (const leaf of this.app.workspace.getLeavesOfType(PLAYER_VIEW)) {
+				const view = leaf.view;
+				if (view instanceof PlayerView) {
+					await view.openByName(song, Number.isFinite(at) ? at : null);
+				}
+			}
+		});
+
 		this.addSettingTab(new ByEarSettingTab(this.app, this));
 	}
 

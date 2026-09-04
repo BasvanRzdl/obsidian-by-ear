@@ -1,8 +1,21 @@
-import { ItemView, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Notice, Platform, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import type ByEarPlugin from "../main";
 import { Engine } from "./engine";
 import { Waveform } from "./waveform";
 import { MediaEntry, listMedia, readMedia } from "../media";
+import {
+	Ledger,
+	NoteIndex,
+	NoteMatch,
+	bindMedia,
+	buildIndex,
+	createNote,
+	emptyLedger,
+	findNote,
+	readLedger,
+	sittingLine,
+	writeLedger,
+} from "../ledger";
 
 export const PLAYER_VIEW = "by-ear-player";
 
@@ -29,6 +42,14 @@ export class PlayerView extends ItemView {
 	private current: MediaEntry | null = null;
 	private duration = 0;
 
+	/** The ledger half: which note this song writes to, and what it last said. */
+	private index: NoteIndex = [];
+	private note: NoteMatch | null = null;
+	private ledger: Ledger = emptyLedger();
+	private openedAt = 0;
+	private saveTimer = 0;
+	private filter = "";
+
 	private raf = 0;
 	private dirty = true;
 
@@ -45,6 +66,10 @@ export class PlayerView extends ItemView {
 		cents: null as HTMLInputElement | null,
 		pitchValue: null as HTMLElement | null,
 		status: null as HTMLElement | null,
+		filter: null as HTMLInputElement | null,
+		noteLink: null as HTMLElement | null,
+		marks: null as HTMLElement | null,
+		findings: null as HTMLTextAreaElement | null,
 	};
 
 	constructor(leaf: WorkspaceLeaf, plugin: ByEarPlugin) {
@@ -80,6 +105,8 @@ export class PlayerView extends ItemView {
 		this.buildWaveform(root);
 		this.buildTransport(root);
 		this.buildControls(root);
+		this.buildMarks(root);
+		this.buildLedgerPane(root);
 		this.buildStatus(root);
 		this.buildKeyLegend(root);
 
@@ -92,6 +119,7 @@ export class PlayerView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		await this.closeLedger();
 		if (this.raf) cancelAnimationFrame(this.raf);
 		this.raf = 0;
 		this.waveform?.destroy();
@@ -100,12 +128,43 @@ export class PlayerView extends ItemView {
 		await this.engine.destroy();
 	}
 
+	/** Opens a song by its file name, optionally at a timestamp. The obsidian:// door. */
+	async openByName(name: string, at: number | null): Promise<void> {
+		if (this.library.length === 0) this.refreshLibrary();
+		const wanted = name.toLowerCase();
+		const entry =
+			this.library.find((e) => e.name.toLowerCase() === wanted) ??
+			this.library.find((e) => e.name.toLowerCase().includes(wanted));
+		if (!entry) {
+			new Notice(`By Ear: no file matching “${name}” in the media folder.`);
+			return;
+		}
+		if (this.current?.path !== entry.path) await this.openSong(entry);
+		if (at !== null) {
+			this.engine.seek(at);
+			this.dirty = true;
+		}
+	}
+
 	/** Called by the plugin when the media folder changes. */
 	refreshLibrary(): void {
 		const folder = this.plugin.settings.mediaFolder;
 		this.library = folder ? listMedia(folder) : [];
+		this.index = buildIndex(this.app);
+		this.renderPicker();
+	}
+
+	/** The searchable text for one file: its own name plus whatever its note knows about it. */
+	private haystack(entry: MediaEntry): string {
+		const match = findNote(this.index, entry.name);
+		const bands = match ? match.bands.join(" ") : "";
+		return `${entry.name} ${match?.artist ?? ""} ${bands}`.toLowerCase();
+	}
+
+	private renderPicker(): void {
 		const picker = this.el.picker;
 		if (!picker) return;
+		const folder = this.plugin.settings.mediaFolder;
 
 		picker.empty();
 		if (!folder) {
@@ -118,9 +177,17 @@ export class PlayerView extends ItemView {
 			picker.disabled = true;
 			return;
 		}
+
+		const shown = this.filter
+			? this.library.filter((e) => this.haystack(e).includes(this.filter))
+			: this.library;
+
 		picker.disabled = false;
-		picker.createEl("option", { text: `Choose a song… (${this.library.length})`, value: "" });
-		for (const entry of this.library) {
+		const label = this.filter
+			? `${shown.length} of ${this.library.length} match “${this.filter}”…`
+			: `Choose a song… (${this.library.length})`;
+		picker.createEl("option", { text: label, value: "" });
+		for (const entry of shown) {
 			picker.createEl("option", {
 				text: `${stripExtension(entry.name)}${entry.video ? "  ▸ video" : ""}`,
 				value: entry.path,
@@ -144,6 +211,25 @@ export class PlayerView extends ItemView {
 
 	private buildLibraryRow(root: HTMLElement): void {
 		const row = root.createDiv({ cls: "by-ear-row by-ear-library" });
+
+		/*
+		 * One box, matching title, artist and band at once.
+		 *
+		 * Deliberately not a library UI -- the vault is the library (spec section 5d). What makes
+		 * "fat bill" a useful thing to type is that the *notes* already know: a chart carries
+		 * `bands:`, so the filter reads the vault rather than keeping a catalogue of its own.
+		 */
+		const filter = row.createEl("input", {
+			type: "search",
+			cls: "by-ear-filter",
+			attr: { placeholder: "filter — song, artist or band" },
+		});
+		filter.addEventListener("input", () => {
+			this.filter = filter.value.trim().toLowerCase();
+			this.renderPicker();
+		});
+		this.el.filter = filter;
+
 		const picker = row.createEl("select", { cls: "dropdown" });
 		picker.addEventListener("change", () => {
 			const entry = this.library.find((e) => e.path === picker.value);
@@ -327,6 +413,43 @@ export class PlayerView extends ItemView {
 		});
 	}
 
+	private buildMarks(root: HTMLElement): void {
+		const row = root.createDiv({ cls: "by-ear-row by-ear-marks-row" });
+
+		const add = row.createEl("button", { text: "Mark", attr: { "aria-label": "Drop a mark here (M)" } });
+		add.addEventListener("click", () => this.addMark());
+
+		const section = row.createEl("button", {
+			text: "Loop section",
+			attr: { "aria-label": "Loop from the previous mark to the next one (S)" },
+		});
+		section.addEventListener("click", () => this.loopSection());
+
+		this.el.marks = row.createDiv({ cls: "by-ear-marks" });
+	}
+
+	/**
+	 * The ledger pane: which note this song writes to, and a box to write in.
+	 *
+	 * The box *is* the note's `## Findings` section -- not an inbox that appends. What he types
+	 * here is what the note says, so there is one text and no reconciling to do later.
+	 */
+	private buildLedgerPane(root: HTMLElement): void {
+		const wrap = root.createDiv({ cls: "by-ear-ledger" });
+		const head = wrap.createDiv({ cls: "by-ear-ledger-head" });
+		this.el.noteLink = head.createSpan({ cls: "by-ear-note-link", text: "" });
+
+		const findings = wrap.createEl("textarea", {
+			cls: "by-ear-findings",
+			attr: { placeholder: "What you are hearing — written straight into the song's note.", rows: "3" },
+		});
+		findings.addEventListener("input", () => {
+			this.ledger.findings = findings.value;
+			this.queueSave();
+		});
+		this.el.findings = findings;
+	}
+
 	private buildStatus(root: HTMLElement): void {
 		const row = root.createDiv({ cls: "by-ear-status" });
 		this.el.status = row.createSpan({ text: "Nothing loaded." });
@@ -341,6 +464,8 @@ export class PlayerView extends ItemView {
 		const keys: [string, string][] = [
 			["space", "play / pause"],
 			["← →", "nudge 1 s  (shift: 5 s)"],
+			["M", "drop a mark here"],
+			["S", "loop this section (mark to mark)"],
 			["A / B", "set loop start / end at the playhead"],
 			["L", "loop on / off"],
 			["X", "clear the loop"],
@@ -359,6 +484,8 @@ export class PlayerView extends ItemView {
 	// ------------------------------------------------------------------ actions
 
 	private async openSong(entry: MediaEntry): Promise<void> {
+		// Whatever the last song learned goes in before the next one is read.
+		await this.closeLedger();
 		this.setStatus(`Reading ${entry.name}…`);
 		try {
 			const bytes = readMedia(entry.path);
@@ -370,6 +497,8 @@ export class PlayerView extends ItemView {
 			this.resetKnobs();
 			this.syncLoopUi();
 			this.dirty = true;
+			// After resetKnobs, so a saved tempo and pitch win over the defaults.
+			await this.loadLedger(entry);
 			// The tab title is the only place the song name stays visible once the view is a tab,
 			// and `getDisplayText()` is only re-read when the leaf is asked to redraw its header.
 			// That method is real but untyped, so it is reached defensively rather than assumed.
@@ -416,6 +545,23 @@ export class PlayerView extends ItemView {
 		this.syncKnobUi();
 	}
 
+	/** Absolute setters, so restoring a saved value and nudging one share the same path. */
+	private setRate(rate: number): void {
+		const clamped = Math.min(RATE_MAX, Math.max(RATE_MIN, Math.round(rate * 100)));
+		this.engine.setRate(clamped / 100);
+		if (this.el.rate) this.el.rate.value = String(clamped);
+		this.syncKnobUi();
+	}
+
+	private setPitch(semitones: number): void {
+		const next = Math.min(12, Math.max(-12, semitones));
+		this.engine.setSemitones(next);
+		const whole = next < 0 ? Math.ceil(next) : Math.floor(next);
+		if (this.el.semitones) this.el.semitones.value = String(whole);
+		if (this.el.cents) this.el.cents.value = String(Math.round((next - whole) * 100));
+		this.syncKnobUi();
+	}
+
 	private adjustRate(deltaPercent: number): void {
 		const next = Math.round(this.engine.transport.rate * 100) + deltaPercent;
 		const clamped = Math.min(RATE_MAX, Math.max(RATE_MIN, next));
@@ -434,6 +580,186 @@ export class PlayerView extends ItemView {
 		this.syncKnobUi();
 	}
 
+	// ------------------------------------------------------------------ marks
+
+	private addMark(): void {
+		if (!this.note) return;
+		const time = this.engine.position();
+		// A mark within a few frames of an existing one is a double-press, not a second mark.
+		if (this.ledger.marks.some((m) => Math.abs(m.time - time) < 0.05)) return;
+		this.ledger.marks.push({ time, name: "" });
+		this.ledger.marks.sort((a, b) => a.time - b.time);
+		this.renderMarks();
+		this.queueSave();
+	}
+
+	/**
+	 * Loops the section the playhead is standing in: from the mark behind it to the mark ahead.
+	 *
+	 * This is the whole point of marks as a separate thing from loops. Marks divide the song once;
+	 * the loop then moves between them without ever being dragged again.
+	 */
+	private loopSection(): void {
+		const marks = this.ledger.marks;
+		if (marks.length === 0) {
+			new Notice("By Ear: drop a mark or two first (M).");
+			return;
+		}
+		const at = this.engine.position();
+		const before = [...marks].reverse().find((m) => m.time <= at + 0.001);
+		const after = marks.find((m) => m.time > at + 0.001);
+		const a = before ? before.time : 0;
+		const b = after ? after.time : this.duration;
+		if (b - a < 0.05) return;
+		this.engine.setLoop(a, b);
+		this.engine.setLooping(true);
+		this.engine.seek(a);
+		this.syncLoopUi();
+		this.dirty = true;
+	}
+
+	private renderMarks(): void {
+		const host = this.el.marks;
+		if (!host) return;
+		host.empty();
+		this.waveform?.setMarks(this.ledger.marks);
+
+		if (this.ledger.marks.length === 0) {
+			host.createSpan({ cls: "by-ear-marks-empty", text: "no marks yet" });
+			return;
+		}
+
+		this.ledger.marks.forEach((mark, i) => {
+			const chip = host.createDiv({ cls: "by-ear-chip" });
+			const name = chip.createEl("input", {
+				cls: "by-ear-chip-name",
+				attr: { value: mark.name, placeholder: formatTime(mark.time), "aria-label": "Mark name" },
+			});
+			// Click seeks; typing renames. Both on one chip, because a mark you cannot jump to is
+			// just a note about a number.
+			name.addEventListener("focus", () => {
+				this.engine.seek(mark.time);
+				this.dirty = true;
+			});
+			name.addEventListener("input", () => {
+				this.ledger.marks[i].name = name.value;
+				this.waveform?.setMarks(this.ledger.marks);
+				this.dirty = true;
+				this.queueSave();
+			});
+			const remove = chip.createEl("button", { cls: "by-ear-chip-x", text: "×", attr: { "aria-label": "Delete mark" } });
+			remove.addEventListener("click", () => {
+				this.ledger.marks.splice(i, 1);
+				this.renderMarks();
+				this.queueSave();
+			});
+		});
+	}
+
+	// ------------------------------------------------------------------ the ledger
+
+	/**
+	 * Binds this media file to its note and restores everything the note remembers.
+	 *
+	 * The note is found, never invented, in the order settled on 4 September: an explicit `media:`
+	 * key, then the Songbook chart, then a study note, and only then a new file. Fourteen of the
+	 * seventeen songs in the folder are Songbook repertoire, so the ordinary outcome is a chart.
+	 */
+	private async loadLedger(entry: MediaEntry): Promise<void> {
+		this.index = buildIndex(this.app);
+		let match = findNote(this.index, entry.name);
+		if (!match) {
+			const file = await createNote(this.app, this.plugin.settings.noteFolder, entry.name);
+			this.index = buildIndex(this.app);
+			match = findNote(this.index, entry.name) ?? { file, how: "byear", artist: "", bands: [] };
+		} else if (match.how !== "media") {
+			// Record the binding so the next lookup is a fact rather than a title guess.
+			await bindMedia(this.app, match.file, entry.name);
+		}
+
+		this.note = match;
+		const content = await this.app.vault.read(match.file);
+		this.ledger = readLedger(this.app, match.file, content);
+		this.openedAt = Date.now();
+
+		if (this.ledger.tempo !== null) this.setRate(this.ledger.tempo);
+		if (this.ledger.semitones !== null) this.setPitch(this.ledger.semitones);
+		if (this.ledger.loops.length > 0) {
+			const first = this.ledger.loops[0];
+			this.engine.setLoop(first.a, first.b);
+		}
+		// The song's region inside the file: a 19-minute medley holds more than one song.
+		if (this.ledger.mediaStart !== null) this.engine.seek(this.ledger.mediaStart);
+
+		if (this.el.findings) this.el.findings.value = this.ledger.findings;
+		this.renderMarks();
+		this.renderNoteLink();
+		this.syncLoopUi();
+		this.dirty = true;
+	}
+
+	private renderNoteLink(): void {
+		const el = this.el.noteLink;
+		if (!el) return;
+		el.empty();
+		if (!this.note) {
+			el.setText("no note");
+			return;
+		}
+		const how = { media: "bound", chart: "chart", study: "study", byear: "by-ear note" }[this.note.how];
+		el.createSpan({ text: "writing to " });
+		const link = el.createEl("a", { text: this.note.file.basename, href: "#" });
+		link.addEventListener("click", (event) => {
+			event.preventDefault();
+			if (this.note) void this.app.workspace.getLeaf("tab").openFile(this.note.file);
+		});
+		el.createSpan({ cls: "by-ear-note-how", text: `  (${how})` });
+	}
+
+	/**
+	 * Saves a second after the last change rather than on every keystroke.
+	 *
+	 * The note may be open in an editor and syncing to an iPad at the same time, and `vault.process`
+	 * rewrites the whole file. Debouncing keeps that to once per thought instead of once per letter.
+	 */
+	private queueSave(): void {
+		if (this.saveTimer) window.clearTimeout(this.saveTimer);
+		this.saveTimer = window.setTimeout(() => void this.saveLedger(), 1000);
+	}
+
+	private async saveLedger(): Promise<void> {
+		if (this.saveTimer) window.clearTimeout(this.saveTimer);
+		this.saveTimer = 0;
+		if (!this.note) return;
+		this.ledger.tempo = this.engine.transport.rate;
+		this.ledger.semitones = this.engine.transport.semitones;
+		try {
+			await writeLedger(this.app, this.note.file, this.ledger);
+		} catch (error) {
+			new Notice(`By Ear could not write the note: ${error instanceof Error ? error.message : error}`);
+		}
+	}
+
+	/**
+	 * Ends a sitting: flush the ledger, and append one dated line of facts.
+	 *
+	 * Facts only -- date, minutes, the tempo and pitch it was worked at. No count, no streak, no
+	 * judgement about whether the session was good. Under a minute is not a sitting and is dropped,
+	 * because opening a file to check something is not practice.
+	 */
+	private async closeLedger(): Promise<void> {
+		if (!this.note) return;
+		const minutes = (Date.now() - this.openedAt) / 60000;
+		if (minutes >= 1) {
+			this.ledger.sittings.push(
+				sittingLine(minutes, this.engine.transport.rate, this.engine.transport.semitones)
+			);
+		}
+		await this.saveLedger();
+		this.note = null;
+		this.ledger = emptyLedger();
+	}
+
 	// ------------------------------------------------------------------ keyboard
 
 	private onKeyDown = (event: KeyboardEvent): void => {
@@ -442,7 +768,10 @@ export class PlayerView extends ItemView {
 		if (target && target.tagName === "INPUT" && (target as HTMLInputElement).type === "range") {
 			if (event.key.startsWith("Arrow")) return;
 		}
-		if (target && (target.tagName === "SELECT" || target.isContentEditable)) return;
+		// A focused text field keeps every key -- typing "some" in the findings box must not drop
+		// two marks and start a loop.
+		if (target && (target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+		if (target && target.tagName === "INPUT" && (target as HTMLInputElement).type !== "range") return;
 
 		const shift = event.shiftKey;
 		let handled = true;
@@ -462,6 +791,14 @@ export class PlayerView extends ItemView {
 				break;
 			case "ArrowDown":
 				this.adjustRate(-RATE_STEP);
+				break;
+			case "m":
+			case "M":
+				this.addMark();
+				break;
+			case "s":
+			case "S":
+				this.loopSection();
 				break;
 			case "a":
 			case "A":
