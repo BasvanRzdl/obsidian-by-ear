@@ -6,15 +6,14 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { applyLedger, splitAtMarker, parseBelow, LEDGER_MARKER, sittingLine } from "./ledger.bundle.mjs";
+import { applyLedger, splitAtMarker, parseBelow, LEDGER_MARKER, sittingLine, emptyLedger } from "./ledger.bundle.mjs";
 
 const chart = fs.readFileSync(new URL("./fixture-chart.md", import.meta.url), "utf8");
 let passed = 0;
 const check = (name, fn) => { fn(); passed++; console.log("  ok  " + name); };
 
 check("a chart with no ledger is left entirely intact", () => {
-  const out = applyLedger(chart, { marks: [], loops: [], findings: "", sittings: [],
-    tempo: null, semitones: null, mediaStart: null, mediaEnd: null });
+  const out = applyLedger(chart, emptyLedger());
   const { above } = splitAtMarker(out);
   assert.equal(above.replace(/\s+$/, ""), chart.replace(/\s+$/, "") + "\n\n---");
   assert.ok(out.includes(LEDGER_MARKER));
@@ -23,8 +22,8 @@ check("a chart with no ledger is left entirely intact", () => {
 });
 
 check("writing twice does not stack markers or grow the file", () => {
-  const led = { marks: [{ time: 12.5, name: "solo" }], loops: [], findings: "bVII turnaround",
-    sittings: ["2026-09-04 · 20 min"], tempo: 0.85, semitones: -1, mediaStart: null, mediaEnd: null };
+  const led = { ...emptyLedger(), marks: [{ time: 12.5, name: "solo" }],
+    findings: "bVII turnaround", sittings: ["2026-09-04 · 20 min"], tempo: 0.85, semitones: -1 };
   const once = applyLedger(chart, led);
   const twice = applyLedger(once, led);
   assert.equal(once, twice, "idempotent");
@@ -32,9 +31,9 @@ check("writing twice does not stack markers or grow the file", () => {
 });
 
 check("a round-trip preserves marks, findings and sittings", () => {
-  const led = { marks: [{ time: 743.2, name: "head" }, { time: 12.25, name: "" }],
+  const led = { ...emptyLedger(), marks: [{ time: 743.2, name: "head" }, { time: 12.25, name: "" }],
     loops: [{ name: "A", a: 1.5, b: 9.25 }], findings: "Two lines\n\nof prose.",
-    sittings: ["2026-09-04 · 20 min"], tempo: 0.9, semitones: 0.05, mediaStart: null, mediaEnd: null };
+    sittings: ["2026-09-04 · 20 min"], tempo: 0.9, semitones: 0.05 };
   const { below } = splitAtMarker(applyLedger(chart, led));
   const back = parseBelow(below);
   assert.deepEqual(back.marks.map(m => m.name), ["", "head"], "sorted by time");
@@ -45,13 +44,21 @@ check("a round-trip preserves marks, findings and sittings", () => {
 });
 
 check("empty placeholders do not come back as content", () => {
-  const empty = { marks: [], loops: [], findings: "", sittings: [],
-    tempo: null, semitones: null, mediaStart: null, mediaEnd: null };
+  const empty = emptyLedger();
   const { below } = splitAtMarker(applyLedger(chart, empty));
   const back = parseBelow(below);
   assert.equal(back.findings, "", "placeholder is not prose");
   assert.deepEqual(back.sittings, [], "placeholder is not a sitting");
   assert.deepEqual(back.marks, []);
+});
+
+check("the ledger has somewhere to hold the loop, tempo and pitch", () => {
+  // v0.2.0 had no field for the current loop at all, so it could never be saved no matter what
+  // the UI did. A shape check is cheap and would have caught that before Bas had to.
+  const led = emptyLedger();
+  for (const key of ["tempo", "semitones", "loopA", "loopB", "loopOn", "mediaStart", "mediaEnd"]) {
+    assert.ok(key in led, "Ledger is missing " + key);
+  }
 });
 
 check("a sitting line is facts only — no count, no judgement", () => {

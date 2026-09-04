@@ -38,6 +38,17 @@ export interface Ledger {
 	sittings: string[];
 	tempo: number | null;
 	semitones: number | null;
+	/**
+	 * The loop as it stands, kept in frontmatter beside tempo and pitch.
+	 *
+	 * Deliberately separate from `loops`, which is the *named* table below the line. They are
+	 * different things -- this is "where I left the loop", that is "sections I mean to come back
+	 * to". Conflating them means either losing the working loop on reopen, or littering the table
+	 * with a row every time a loop is dragged.
+	 */
+	loopA: number | null;
+	loopB: number | null;
+	loopOn: boolean;
 	/** The song's region inside the media file. A 19-minute medley holds more than one song. */
 	mediaStart: number | null;
 	mediaEnd: number | null;
@@ -51,6 +62,9 @@ export function emptyLedger(): Ledger {
 		sittings: [],
 		tempo: null,
 		semitones: null,
+		loopA: null,
+		loopB: null,
+		loopOn: false,
 		mediaStart: null,
 		mediaEnd: null,
 	};
@@ -278,6 +292,9 @@ export function readLedger(app: App, file: TFile, content: string): Ledger {
 	};
 	ledger.tempo = num(fm.tempo);
 	ledger.semitones = num(fm.pitch);
+	ledger.loopA = num(fm.loop_a);
+	ledger.loopB = num(fm.loop_b);
+	ledger.loopOn = fm.loop_on === true;
 	ledger.mediaStart = num(fm.media_start);
 	ledger.mediaEnd = num(fm.media_end);
 
@@ -368,10 +385,22 @@ export async function writeLedger(app: App, file: TFile, ledger: Ledger): Promis
 	await app.vault.process(file, (content) => applyLedger(content, ledger));
 
 	await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
-		if (ledger.tempo !== null) fm.tempo = ledger.tempo;
-		if (ledger.semitones !== null) fm.pitch = ledger.semitones;
+		if (ledger.tempo !== null) fm.tempo = round(ledger.tempo);
+		if (ledger.semitones !== null) fm.pitch = round(ledger.semitones);
 		if (ledger.mediaStart !== null) fm.media_start = round(ledger.mediaStart);
 		if (ledger.mediaEnd !== null) fm.media_end = round(ledger.mediaEnd);
+
+		// A cleared loop must clear the keys, not leave yesterday's numbers sitting in the note --
+		// which is why these are deleted rather than skipped when null.
+		if (ledger.loopA !== null && ledger.loopB !== null) {
+			fm.loop_a = round(ledger.loopA);
+			fm.loop_b = round(ledger.loopB);
+			fm.loop_on = ledger.loopOn;
+		} else {
+			delete fm.loop_a;
+			delete fm.loop_b;
+			delete fm.loop_on;
+		}
 	});
 }
 

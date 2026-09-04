@@ -52,6 +52,8 @@ export class PlayerView extends ItemView {
 	private filter = "";
 	/** Whether the ledger holds anything not yet on disk. Drives the receipt, nothing else. */
 	private unsaved = false;
+	/** True only while restoring a note, so putting values back does not count as changing them. */
+	private restoring = false;
 
 	private raf = 0;
 	private dirty = true;
@@ -703,12 +705,15 @@ export class PlayerView extends ItemView {
 		this.ledger = readLedger(this.app, match.file, content);
 		this.openedAt = Date.now();
 
+		this.restoring = true;
 		if (this.ledger.tempo !== null) this.setRate(this.ledger.tempo);
 		if (this.ledger.semitones !== null) this.setPitch(this.ledger.semitones);
-		if (this.ledger.loops.length > 0) {
-			const first = this.ledger.loops[0];
-			this.engine.setLoop(first.a, first.b);
+		if (this.ledger.loopA !== null && this.ledger.loopB !== null) {
+			this.engine.setLoop(this.ledger.loopA, this.ledger.loopB);
+			// Restored armed if it was armed: "where I left it" includes whether it was running.
+			this.engine.setLooping(this.ledger.loopOn);
 		}
+		this.restoring = false;
 		// The song's region inside the file: a 19-minute medley holds more than one song.
 		if (this.ledger.mediaStart !== null) this.engine.seek(this.ledger.mediaStart);
 
@@ -773,8 +778,7 @@ export class PlayerView extends ItemView {
 		if (this.saveTimer) window.clearTimeout(this.saveTimer);
 		this.saveTimer = 0;
 		if (!this.note) return;
-		this.ledger.tempo = this.engine.transport.rate;
-		this.ledger.semitones = this.engine.transport.semitones;
+		this.captureTransport(false);
 		try {
 			await writeLedger(this.app, this.note.file, this.ledger);
 			this.unsaved = false;
@@ -931,6 +935,7 @@ export class PlayerView extends ItemView {
 	}
 
 	private syncLoopUi(): void {
+		this.captureTransport();
 		const { loopA, loopB, looping } = this.engine.transport;
 		if (this.el.loopReadout) {
 			this.el.loopReadout.setText(
@@ -942,7 +947,30 @@ export class PlayerView extends ItemView {
 		this.el.loopToggle?.toggleClass("is-active", looping);
 	}
 
+	/**
+	 * Copies live transport state into the ledger and queues a write.
+	 *
+	 * Called from `syncKnobUi` and `syncLoopUi` -- the two funnels every tempo, pitch and loop
+	 * change already passes through, whether it came from a slider, a button, the keyboard or a
+	 * drag on the waveform. Hooking the funnels rather than the dozen call sites is why this cannot
+	 * quietly miss one, which is exactly how tempo, pitch and the loop went unsaved in v0.2.
+	 */
+	private captureTransport(queue = true): void {
+		if (this.restoring || !this.note) return;
+		const { rate, semitones, loopA, loopB, looping } = this.engine.transport;
+		this.ledger.tempo = rate;
+		this.ledger.semitones = semitones;
+		this.ledger.loopA = loopA;
+		this.ledger.loopB = loopB;
+		this.ledger.loopOn = looping;
+		// `queue` is false when the save is already happening: queueing from inside saveLedger
+		// re-arms the timer it just cleared, and the plugin rewrites the note once a second for
+		// ever. Caught by reading the two call paths against each other, not by running it.
+		if (queue) this.queueSave();
+	}
+
 	private syncKnobUi(): void {
+		this.captureTransport();
 		const { rate, semitones } = this.engine.transport;
 		if (this.el.rateValue) this.el.rateValue.setText(`${Math.round(rate * 100)}%`);
 		if (this.el.pitchValue) {
