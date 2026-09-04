@@ -10,6 +10,16 @@ export const PLAYER_VIEW = "by-ear-player";
 const RATE_MIN = 25;
 const RATE_MAX = 150;
 
+/**
+ * Step sizes for the buttons -- and for the keyboard, which reads the same constants so the two can
+ * never drift apart. 5 cents is deliberate: it is about the smallest pitch move the ear reliably
+ * hears, which makes it the right size for chasing a record that sits slightly off concert pitch,
+ * while the semitone buttons handle anything larger.
+ */
+const RATE_STEP = 5;
+const SEMITONE_STEP = 1;
+const CENT_STEP = 5;
+
 export class PlayerView extends ItemView {
 	private plugin: ByEarPlugin;
 	private engine = new Engine();
@@ -224,17 +234,54 @@ export class PlayerView extends ItemView {
 		this.el.loopReadout = loops.createDiv({ cls: "by-ear-loop-readout", text: "no loop" });
 	}
 
+	/**
+	 * A slider with a - and a + on either side of it.
+	 *
+	 * The slider is for finding a value; the buttons are for landing on one. Dragging to exactly
+	 * -2 semitones is fiddly, pressing - twice is not. Both drive the same number, so this is one
+	 * control with two grips rather than two systems.
+	 */
+	private stepper(
+		parent: HTMLElement,
+		attr: Record<string, string>,
+		step: number,
+		unit: string,
+		apply: (delta: number) => void
+	): HTMLInputElement {
+		const row = parent.createDiv({ cls: "by-ear-stepper" });
+		const button = (text: string, delta: number, how: string) => {
+			const el = row.createEl("button", {
+				text,
+				cls: "by-ear-step",
+				attr: { "aria-label": `${how} ${step} ${unit}` },
+			});
+			// A focused button would swallow the spacebar, and the spacebar is play/pause. Always.
+			el.tabIndex = -1;
+			el.addEventListener("mousedown", (event) => event.preventDefault());
+			el.addEventListener("click", () => {
+				apply(delta);
+				this.dirty = true;
+			});
+		};
+		button("\u2212", -step, "down");
+		const slider = row.createEl("input", { type: "range", cls: "slider", attr });
+		button("+", step, "up");
+		return slider;
+	}
+
 	private buildControls(root: HTMLElement): void {
 		const grid = root.createDiv({ cls: "by-ear-controls" });
 
 		// --- tempo
 		const tempo = grid.createDiv({ cls: "by-ear-knob" });
 		tempo.createDiv({ cls: "by-ear-knob-label", text: "Tempo" });
-		const rate = tempo.createEl("input", {
-			type: "range",
-			cls: "slider",
-			attr: { min: String(RATE_MIN), max: String(RATE_MAX), step: "1", value: "100" },
-		});
+		const rate = this.stepper(
+			tempo,
+			{ min: String(RATE_MIN), max: String(RATE_MAX), step: "1", value: "100" },
+			RATE_STEP,
+			"percent",
+			(delta) => this.adjustRate(delta)
+		);
 		rate.addEventListener("input", () => {
 			this.engine.setRate(Number(rate.value) / 100);
 			this.syncKnobUi();
@@ -246,16 +293,21 @@ export class PlayerView extends ItemView {
 		// --- pitch, in two inputs feeding one number
 		const pitch = grid.createDiv({ cls: "by-ear-knob" });
 		pitch.createDiv({ cls: "by-ear-knob-label", text: "Pitch" });
-		const semitones = pitch.createEl("input", {
-			type: "range",
-			cls: "slider",
-			attr: { min: "-12", max: "12", step: "1", value: "0" },
-		});
-		const cents = pitch.createEl("input", {
-			type: "range",
-			cls: "slider",
-			attr: { min: "-100", max: "100", step: "1", value: "0" },
-		});
+		const semitones = this.stepper(
+			pitch,
+			{ min: "-12", max: "12", step: "1", value: "0" },
+			SEMITONE_STEP,
+			"semitone",
+			(delta) => this.adjustPitch(delta)
+		);
+		// The cents buttons move the same single number -- a fraction of a semitone is cents.
+		const cents = this.stepper(
+			pitch,
+			{ min: "-100", max: "100", step: "1", value: "0" },
+			CENT_STEP,
+			"cents",
+			(delta) => this.adjustPitch(delta / 100)
+		);
 		const applyPitch = () => {
 			// Fractional semitones *are* cents in this engine, so there is one number, not two
 			// systems -- which is why the cents slider costs nothing.
@@ -300,8 +352,8 @@ export class PlayerView extends ItemView {
 			["L", "loop on / off"],
 			["X", "clear the loop"],
 			["[ ]", "nudge A by 10 ms  (shift: nudge B)"],
-			["↑ ↓", "tempo ± 5%"],
-			["- =", "pitch ± 1 semitone  (shift: ± 10 cents)"],
+			["↑ ↓", `tempo ± ${RATE_STEP}%`],
+			["- =", `pitch ± ${SEMITONE_STEP} semitone  (shift: ± ${CENT_STEP} cents)`],
 			["0", "reset tempo and pitch"],
 			["wheel", "zoom around the pointer  (shift: pan)"],
 		];
@@ -413,10 +465,10 @@ export class PlayerView extends ItemView {
 				this.engine.nudge(shift ? 5 : 1);
 				break;
 			case "ArrowUp":
-				this.adjustRate(5);
+				this.adjustRate(RATE_STEP);
 				break;
 			case "ArrowDown":
-				this.adjustRate(-5);
+				this.adjustRate(-RATE_STEP);
 				break;
 			case "a":
 			case "A":
@@ -445,11 +497,11 @@ export class PlayerView extends ItemView {
 				break;
 			case "-":
 			case "_":
-				this.adjustPitch(shift ? -0.1 : -1);
+				this.adjustPitch(shift ? -CENT_STEP / 100 : -SEMITONE_STEP);
 				break;
 			case "=":
 			case "+":
-				this.adjustPitch(shift ? 0.1 : 1);
+				this.adjustPitch(shift ? CENT_STEP / 100 : SEMITONE_STEP);
 				break;
 			case "0":
 				this.resetKnobs();

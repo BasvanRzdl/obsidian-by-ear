@@ -423,8 +423,8 @@ class LoadMeter {
 	}
 
 	read(): string {
-		if (!this.capacity) return "load: not reported on this platform";
-		if (this.updates === 0) return "load: no data yet";
+		if (!this.capacity) return "underruns: no meter on this platform";
+		if (this.updates === 0) return "underruns: no data yet";
 		return (
 			`load ${(this.average * 100).toFixed(0)}% now, ${(this.peak * 100).toFixed(0)}% peak · ` +
 			`underruns ${(this.underrun * 100).toFixed(2)}%${this.underrun > 0 ? " ← DROPOUTS" : ""}`

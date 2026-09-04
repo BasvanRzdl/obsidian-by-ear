@@ -1,9 +1,9 @@
 {
-  "id": "by-ear",
-  "name": "By Ear",
-  "version": "0.1.0",
-  "minAppVersion": "1.5.0",
-  "description": "Learn songs by ear: loop, slow down and pitch-shift audio and video, keeping your progress in your notes.",
-  "author": "Bas van Roozendaal",
-  "isDesktopOnly": false
+	"id": "by-ear",
+	"name": "By Ear",
+	"version": "0.1.1",
+	"minAppVersion": "1.5.0",
+	"description": "Learn songs by ear: loop, slow down and pitch-shift audio and video, keeping your progress in your notes.",
+	"author": "Bas van Roozendaal",
+	"isDesktopOnly": false
 }
