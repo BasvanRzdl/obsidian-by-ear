@@ -45,7 +45,6 @@ export class PlayerView extends ItemView {
 		cents: null as HTMLInputElement | null,
 		pitchValue: null as HTMLElement | null,
 		status: null as HTMLElement | null,
-		meter: null as HTMLElement | null,
 	};
 
 	constructor(leaf: WorkspaceLeaf, plugin: ByEarPlugin) {
@@ -331,14 +330,8 @@ export class PlayerView extends ItemView {
 	private buildStatus(root: HTMLElement): void {
 		const row = root.createDiv({ cls: "by-ear-status" });
 		this.el.status = row.createSpan({ text: "Nothing loaded." });
-		/**
-		 * The dropout meter, kept on screen on purpose while this is being built.
-		 *
-		 * It reads from the far side of `ctx.destination`, which is the only side that can see an
-		 * underrun -- six instruments tapping before it all read clean through an evening of
-		 * audible crackle. If it ever shows anything but 0.00%, the fix is in engine.ts, not here.
-		 */
-		this.el.meter = row.createSpan({ cls: "by-ear-meter", text: "" });
+		// The dropout meter that used to sit here is gone -- Chromium 142 has no
+		// AudioRenderCapacity, so it never reported. See the note in engine.ts.
 	}
 
 	private buildKeyLegend(root: HTMLElement): void {
@@ -542,9 +535,6 @@ export class PlayerView extends ItemView {
 		}
 		if (this.el.playButton) {
 			setIcon(this.el.playButton, playing ? "pause" : "play");
-		}
-		if (this.el.meter && this.engine.ready) {
-			this.el.meter.setText(this.engine.loadReading());
 		}
 	}
 

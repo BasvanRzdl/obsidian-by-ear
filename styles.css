@@ -130,20 +130,12 @@ canvas.by-ear-wave {
 .by-ear-status {
   display: flex;
   justify-content: space-between;
-  /* In a narrow pane the meter used to be squeezed to nothing by a long status line. It wraps
-     onto its own row instead -- an instrument you cannot see is worse than no instrument. */
   flex-wrap: wrap;
   gap: 12px;
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
   border-top: 1px solid var(--background-modifier-border);
   padding-top: 8px;
-}
-
-.by-ear-meter {
-  font-family: var(--font-monospace);
-  white-space: nowrap;
-  opacity: 0.75;
 }
 
 /* --- steppers: a slider with a - and a + on either side --------------------- */

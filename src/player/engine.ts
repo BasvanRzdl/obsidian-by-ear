@@ -76,7 +76,6 @@ export class Engine {
 	private ctx: AudioContext | null = null;
 	private node: StretchNode | null = null;
 	private gain: GainNode | null = null;
-	private meter: LoadMeter | null = null;
 
 	private duration = 0;
 	private state: EngineState = {
@@ -257,14 +256,7 @@ export class Engine {
 		}
 	}
 
-	/** Whatever the underrun meter last reported, or an honest "no data". */
-	loadReading(): string {
-		return this.meter?.read() ?? "engine idle";
-	}
-
 	async destroy(): Promise<void> {
-		this.meter?.stop();
-		this.meter = null;
 		this.node = null;
 		this.gain = null;
 		// The only way to retire a leaked processor. Everything else in this file depends on it.
@@ -322,7 +314,6 @@ export class Engine {
 	private async context(): Promise<AudioContext> {
 		if (!this.ctx) {
 			this.ctx = new AudioContext({ latencyHint: "playback" });
-			this.meter = new LoadMeter(this.ctx);
 		}
 		if (this.ctx.state === "suspended") await this.ctx.resume();
 		return this.ctx;
@@ -358,84 +349,30 @@ export class Engine {
 		this.gain.connect(ctx.destination);
 
 		this.node = node;
-		this.meter?.start();
 		return node;
 	}
 }
 
 /**
- * The only instrument here that can see a dropout.
+ * ⚠️ THERE IS NO DROPOUT INSTRUMENT ON THIS PLATFORM. Measured, not assumed -- 4 September 2026.
  *
- * Anything tapping between the engine and `ctx.destination` measures the graph, and an underrun
- * happens *after* the graph -- which is how six instruments in a row read clean while the fault was
- * plainly audible. `renderCapacity.underrunRatio` reports from the far side of that line.
+ * A `LoadMeter` used to live here, reading `AudioContext.renderCapacity.underrunRatio`: the one
+ * number visible from the far side of `ctx.destination`, where an underrun actually happens.
+ * Every other analyser taps before that line, which is how six instruments in a row read clean
+ * through an evening of audible crackle.
  *
- * ⚠️ Feature-detected, and a missing meter reads as "no data", never as a pass. It is Web Audio 1.1
- * and Chrome-only at the time of writing, so the iPad will most likely report nothing at all.
+ * It never once reported. Obsidian 1.12.7 runs Electron 39 / Chromium 142, and that build has no
+ * `AudioRenderCapacity` at all: `peakLoad`, `averageLoad` and `underrunRatio` are absent from the
+ * framework binary while every control symbol (`baseLatency`, `audioWorklet`, `decodeAudioData`)
+ * is present. iOS WKWebView does not have it either. So the cure the spike wrote down was never
+ * administered, and the meter said so honestly -- "no data" was the truth, not a pass.
+ *
+ * It is deleted rather than left on screen dark, because a permanently silent instrument reads as
+ * a clean one. **On this platform Bas's ear is the instrument.** If a dropout detector is ever
+ * needed again, the honest path is a message channel from inside the worklet (nothing listens to
+ * one today) -- and it must be validated by inducing a real dropout (`splitComputation: false`
+ * reproduces Test J2's crackle) before a single reading from it is believed.
  */
-class LoadMeter {
-	private capacity: RenderCapacity | null;
-	private peak = 0;
-	private average = 0;
-	private underrun = 0;
-	private updates = 0;
-	private running = false;
-
-	private onUpdate = (event: Event) => {
-		const e = event as unknown as { averageLoad: number; peakLoad: number; underrunRatio: number };
-		this.updates++;
-		this.average = e.averageLoad;
-		this.peak = Math.max(this.peak, e.peakLoad);
-		this.underrun = Math.max(this.underrun, e.underrunRatio);
-	};
-
-	constructor(ctx: AudioContext) {
-		this.capacity = (ctx as unknown as { renderCapacity?: RenderCapacity }).renderCapacity ?? null;
-	}
-
-	start(): void {
-		if (!this.capacity || this.running) return;
-		try {
-			this.capacity.addEventListener("update", this.onUpdate);
-			this.capacity.start({ updateInterval: 0.5 });
-			this.running = true;
-		} catch {
-			this.capacity = null;
-		}
-	}
-
-	stop(): void {
-		if (!this.capacity || !this.running) return;
-		try {
-			this.capacity.stop();
-			this.capacity.removeEventListener("update", this.onUpdate);
-		} catch {
-			/* the reading is already taken */
-		}
-		this.running = false;
-	}
-
-	/** Resets the high-water marks, so a bad passage can be attributed to what was just changed. */
-	reset(): void {
-		this.peak = 0;
-		this.underrun = 0;
-		this.updates = 0;
-	}
-
-	read(): string {
-		if (!this.capacity) return "underruns: no meter on this platform";
-		if (this.updates === 0) return "underruns: no data yet";
-		return (
-			`load ${(this.average * 100).toFixed(0)}% now, ${(this.peak * 100).toFixed(0)}% peak · ` +
-			`underruns ${(this.underrun * 100).toFixed(2)}%${this.underrun > 0 ? " ← DROPOUTS" : ""}`
-		);
-	}
-}
-
-interface RenderCapacity extends EventTarget {
-	start(options: { updateInterval: number }): void;
-	stop(): void;
-}
 
 /** One channel of peaks-grade samples. Averaged, not summed, so a mono file reads the same. */
 function downmix(buffer: AudioBuffer): Float32Array {
