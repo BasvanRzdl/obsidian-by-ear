@@ -178,17 +178,41 @@ export class PlayerView extends ItemView {
 		this.renderPicker();
 	}
 
-	private async addFromFiles(file: File): Promise<void> {
-		this.setStatus(`Copying ${file.name} onto this device…`);
-		try {
-			const entry = await cacheSong(file);
-			await this.refreshLibrary();
-			const added = this.library.find((e) => e.name === entry.name);
-			if (added) await this.openSong(added);
-		} catch (error) {
-			// Quota is the realistic failure: a phone with little space free and a 113 MB video.
-			new Notice(`By Ear could not keep that song: ${message(error)}`);
-			this.setStatus(`Could not add ${file.name} — ${message(error)}`);
+	/**
+	 * Copies chosen songs onto the device.
+	 *
+	 * Takes a list, not a file, because iOS gives no way to read a folder -- so the nearest thing to
+	 * "point at my By Ear folder" is selecting everything in it once. Each file is reported as it
+	 * lands, since a bulk import of several hundred megabytes is not instant and a silent wait looks
+	 * like a hang.
+	 */
+	private async addFromFiles(files: File[]): Promise<void> {
+		const added: string[] = [];
+		const failed: string[] = [];
+		for (const [i, file] of files.entries()) {
+			this.setStatus(`Copying ${i + 1} of ${files.length} — ${file.name}…`);
+			try {
+				const entry = await cacheSong(file);
+				added.push(entry.name);
+			} catch (error) {
+				// Quota is the realistic failure: a phone with little space and a 113 MB video.
+				failed.push(`${file.name} (${message(error)})`);
+			}
+		}
+
+		await this.refreshLibrary();
+		if (failed.length > 0) {
+			new Notice(`By Ear could not keep ${failed.length} of ${files.length}:\n${failed.join("\n")}`);
+		}
+		this.setStatus(
+			`${added.length} song${added.length === 1 ? "" : "s"} on this device` +
+				(failed.length > 0 ? `, ${failed.length} refused` : "") +
+				". They stay until you remove them."
+		);
+		// Open one only if it was a single pick; a bulk import should not hijack the player.
+		if (files.length === 1 && added.length === 1) {
+			const entry = this.library.find((e) => e.name === added[0]);
+			if (entry) await this.openSong(entry);
 		}
 	}
 
@@ -292,14 +316,18 @@ export class PlayerView extends ItemView {
 			const chooser = row.createEl("input", {
 				type: "file",
 				cls: "by-ear-file-input",
-				attr: { accept: "audio/*,video/*", "aria-label": "Add a song from Files" },
+				// `multiple` is the whole mitigation for iOS having no directory access: the folder
+				// cannot be read, but the entire folder can be selected in one go, once, and it is
+				// cached from then on. Adding songs one at a time was never a requirement, only a
+				// consequence of asking for one file.
+				attr: { accept: "audio/*,video/*", multiple: "true", "aria-label": "Add songs from Files" },
 			});
-			const add = row.createEl("button", { text: "Add…", attr: { "aria-label": "Add a song from Files" } });
+			const add = row.createEl("button", { text: "Add songs…", attr: { "aria-label": "Add songs from Files" } });
 			add.addEventListener("click", () => chooser.click());
 			chooser.addEventListener("change", () => {
-				const file = chooser.files?.[0];
+				const files = Array.from(chooser.files ?? []);
 				chooser.value = "";
-				if (file) void this.addFromFiles(file);
+				if (files.length > 0) void this.addFromFiles(files);
 			});
 
 			const forget = row.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Remove this song from the device" } });
@@ -359,6 +387,9 @@ export class PlayerView extends ItemView {
 		button("rewind", "Back 5 s", () => this.engine.nudge(-5));
 		button("chevron-left", "Back 1 s", () => this.engine.nudge(-1));
 		this.el.playButton = button("play", "Play / pause (space)", () => this.engine.toggle());
+		// Named rather than found by position: the stylesheet makes this one the big centred target
+		// on mobile, and a CSS rule counting siblings would break the day a button is reordered.
+		this.el.playButton.addClass("by-ear-play");
 		button("chevron-right", "Forward 1 s", () => this.engine.nudge(1));
 		button("fast-forward", "Forward 5 s", () => this.engine.nudge(5));
 

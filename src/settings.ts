@@ -84,8 +84,10 @@ export class ByEarSettingTab extends PluginSettingTab {
 			// The folder setting is desktop-only and saying so is kinder than showing a path that
 			// will never be read: on iOS songs come in through Files and live in the app's cache.
 			status.setText(
-				"On this device the media folder is not used — add songs in the player with “Add…”, " +
-					"and they stay on the device until you remove them. Your notes still sync as normal."
+				"On this device the media folder is not used. iOS does not let any app read a folder " +
+					"it was not given, so songs come in through Files — but you can select the whole " +
+					"folder at once with “Add songs…”, and they stay on the device until you remove " +
+					"them. Your notes sync as normal."
 			);
 			return;
 		}

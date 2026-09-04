@@ -6,7 +6,17 @@
  * window or the canvas size changes. Drawing is O(columns) and happens every frame.
  */
 
+/**
+ * How near a loop edge a press has to land to grab it rather than start a new loop.
+ *
+ * ⚠️ Sized for the input device, not for the design. Seven pixels is right for a cursor, which lands
+ * exactly where it is aimed; a fingertip covers roughly 10 mm and is aimed at something it is
+ * partly covering, so on touch the tolerance has to be about three times larger or the edge is
+ * simply not grabbable. This is the same class of mistake as a 24px button: correct on a desk,
+ * unusable in the hands.
+ */
 const HANDLE_GRAB_PX = 7;
+const HANDLE_GRAB_TOUCH_PX = 22;
 const DRAG_THRESHOLD_PX = 4;
 /** Never zoom in past this: below it the peaks are individual samples and the picture is noise. */
 const MIN_WINDOW_SECONDS = 0.02;
@@ -361,11 +371,12 @@ export class Waveform {
 		this.dragOriginTime = time;
 
 		// Grabbing an existing edge is more useful than starting a new region on top of it.
-		if (this.loopA !== null && Math.abs(x - this.timeToX(this.loopA, width)) <= HANDLE_GRAB_PX) {
+		const grab = event.pointerType === "mouse" ? HANDLE_GRAB_PX : HANDLE_GRAB_TOUCH_PX;
+		if (this.loopA !== null && Math.abs(x - this.timeToX(this.loopA, width)) <= grab) {
 			this.drag = "handle-a";
 			this.dragA = this.loopA;
 			this.dragB = this.loopB;
-		} else if (this.loopB !== null && Math.abs(x - this.timeToX(this.loopB, width)) <= HANDLE_GRAB_PX) {
+		} else if (this.loopB !== null && Math.abs(x - this.timeToX(this.loopB, width)) <= grab) {
 			this.drag = "handle-b";
 			this.dragA = this.loopA;
 			this.dragB = this.loopB;

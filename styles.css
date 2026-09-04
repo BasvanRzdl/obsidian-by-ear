@@ -306,11 +306,21 @@ canvas.by-ear-wave {
   font-size: var(--font-ui-small);
 }
 
-/* --- iOS ------------------------------------------------------------------
+/* --- iOS and iPadOS -------------------------------------------------------
  *
- * Bigger everything. On the desktop a control is hit with a cursor that lands where it is aimed;
- * on an iPad it is hit with a thumb, half-looked-at, while the other hand is holding a guitar
- * neck. 44px is Apple's own minimum and it is the right floor here.
+ * Sized from the guidelines rather than by eye. Apple's HIG puts the minimum touch target at
+ * 44x44pt, Material at 48dp, and WCAG 2.2 at 44x44 CSS px; 48 is used here because it satisfies all
+ * three and this is a tool operated while holding a guitar, half-looking, which is worse than the
+ * conditions any of those numbers assume.
+ *
+ * ⚠️ The v0.3.0 mistake worth naming: it set `min-height: 44px` and no `min-width`, so every icon
+ * button stayed as narrow as its glyph. Half a target is not a target.
+ *
+ * The layout is reordered rather than redesigned. Research on one-handed use puts primary actions in
+ * the bottom third -- roughly three quarters of mobile interaction is thumb-driven -- so the
+ * transport moves to the bottom and sticks there, with the play button biggest and centred, the way
+ * the iOS camera shutter is. On an iPad, usually on a lap or a stand and worked with two hands, that
+ * matters less than raw target size; it costs nothing there, so one layout serves both.
  */
 
 .by-ear-file-input {
@@ -318,39 +328,109 @@ canvas.by-ear-wave {
 }
 
 .by-ear-player.is-mobile {
-  gap: 14px;
-  padding: 14px 14px 24px;
+  gap: 16px;
+  padding: 14px 14px 0;
+  min-height: 100%;
+}
+
+/* Every target, not just the ones with text in them. */
+.by-ear-player.is-mobile button,
+.by-ear-player.is-mobile .dropdown,
+.by-ear-player.is-mobile .by-ear-filter,
+.by-ear-player.is-mobile input[type="search"] {
+  min-height: 48px;
+  min-width: 48px;
+  font-size: var(--font-ui-medium);
 }
 
 .by-ear-player.is-mobile button {
-  min-height: 44px;
-  padding-inline: 14px;
-  font-size: var(--font-ui-medium);
+  padding-inline: 16px;
+}
+
+.by-ear-player.is-mobile .by-ear-row {
+  gap: 10px; /* Adjacent targets need space, or the wrong one gets hit. */
 }
 
 .by-ear-player.is-mobile .by-ear-step {
-  width: 44px;
-}
-
-.by-ear-player.is-mobile .by-ear-chip-x {
-  min-height: 32px;
-}
-
-.by-ear-player.is-mobile .dropdown,
-.by-ear-player.is-mobile .by-ear-filter {
-  min-height: 44px;
-  font-size: var(--font-ui-medium);
+  width: 56px;
+  font-size: var(--font-ui-large);
 }
 
 .by-ear-player.is-mobile .slider {
-  height: 32px;
+  height: 44px;
 }
 
 .by-ear-player.is-mobile .by-ear-wave-wrap {
-  min-height: 180px;
+  min-height: 220px;
+}
+
+.by-ear-player.is-mobile .by-ear-chip {
+  padding: 4px 4px 4px 10px;
+  border-radius: 22px;
+}
+
+.by-ear-player.is-mobile .by-ear-chip-name {
+  width: 8em;
+  font-size: var(--font-ui-small);
+  min-height: 40px;
+}
+
+.by-ear-player.is-mobile .by-ear-chip-x {
+  min-width: 40px;
+  min-height: 40px;
+  font-size: var(--font-ui-large);
+}
+
+.by-ear-player.is-mobile .by-ear-findings {
+  min-height: 6em;
+  font-size: var(--font-ui-medium);
 }
 
 /* The keyboard legend is meaningless without a keyboard. */
 .by-ear-player.is-mobile .by-ear-keys {
   display: none;
+}
+
+/* --- the thumb zone --- */
+
+.by-ear-player.is-mobile .by-ear-library { order: 1; }
+.by-ear-player.is-mobile .by-ear-wave-wrap { order: 2; }
+.by-ear-player.is-mobile .by-ear-marks-row { order: 3; }
+.by-ear-player.is-mobile .by-ear-loops { order: 4; }
+.by-ear-player.is-mobile .by-ear-controls { order: 5; }
+.by-ear-player.is-mobile .by-ear-ledger { order: 6; }
+.by-ear-player.is-mobile .by-ear-status { order: 7; }
+
+/* Last, and it stays on screen: the control reached for most is the one furthest from the eyes. */
+.by-ear-player.is-mobile .by-ear-transport {
+  order: 8;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-inline: -14px;
+  padding: 8px 14px calc(14px + env(safe-area-inset-bottom));
+  background: var(--background-primary);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.by-ear-player.is-mobile .by-ear-clock {
+  order: -1;
+  flex-basis: 100%;
+  text-align: center;
+}
+
+.by-ear-player.is-mobile .by-ear-transport .by-ear-icon {
+  min-width: 56px;
+  min-height: 56px;
+}
+
+/* The shutter-button principle: the thing pressed most is the biggest and in the middle. */
+.by-ear-player.is-mobile .by-ear-play {
+  min-width: 68px;
+  min-height: 68px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
 }
