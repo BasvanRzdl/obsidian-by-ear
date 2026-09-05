@@ -2,6 +2,7 @@ import { ItemView, Notice, Platform, TFile, WorkspaceLeaf, setIcon } from "obsid
 import type ByEarPlugin from "../main";
 import { Engine } from "./engine";
 import { Waveform } from "./waveform";
+import { VideoScreen } from "./video";
 import { MediaEntry, listMedia, readMedia } from "../media";
 import {
 	KeepAwake,
@@ -10,7 +11,7 @@ import {
 	forgetCached,
 	listCached,
 	nudgeAudioSession,
-	readCached,
+	readCachedBlob,
 } from "../mobile";
 import {
 	LEDGER_MARKER,
@@ -47,6 +48,7 @@ export class PlayerView extends ItemView {
 	private plugin: ByEarPlugin;
 	private engine = new Engine();
 	private waveform: Waveform | null = null;
+	private video: VideoScreen | null = null;
 
 	private library: MediaEntry[] = [];
 	private current: MediaEntry | null = null;
@@ -166,6 +168,8 @@ export class PlayerView extends ItemView {
 		if (this.raf) cancelAnimationFrame(this.raf);
 		this.raf = 0;
 		this.awake.destroy();
+		this.video?.destroy();
+		this.video = null;
 		this.waveform?.destroy();
 		this.waveform = null;
 		// Closing the context is the only way to retire the worklet processor -- see engine.ts.
@@ -260,6 +264,7 @@ export class PlayerView extends ItemView {
 		this.current = null;
 		this.engine.pause();
 		this.engine.setLoop(null, null);
+		this.video?.unload();
 		this.waveform?.clear();
 		this.duration = 0;
 		await this.refreshLibrary();
@@ -381,6 +386,10 @@ export class PlayerView extends ItemView {
 	}
 
 	private buildWaveform(root: HTMLElement): void {
+		// The picture sits in its own box above the waveform rather than behind it: a waveform drawn
+		// over hands is unreadable, and hands behind a waveform are worse.
+		this.video = new VideoScreen(root.createDiv({ cls: "by-ear-screen" }));
+
 		const wrap = root.createDiv({ cls: "by-ear-wave-wrap" });
 		const canvas = wrap.createEl("canvas", { cls: "by-ear-wave" });
 		this.el.canvas = canvas;
@@ -645,12 +654,32 @@ export class PlayerView extends ItemView {
 		await this.closeLedger();
 		this.setStatus(`Reading ${entry.name}…`);
 		try {
-			const bytes = entry.source === "cache" ? await readCached(entry.name) : readMedia(entry.path);
+			/*
+			 * One read, then one decode. The order matters on a phone.
+			 *
+			 * `decodeAudioData` detaches the ArrayBuffer it is given, so the video cannot share it.
+			 * On iOS the cache hands back a Blob, so the picture costs nothing extra and the bytes
+			 * for decoding are pulled out of it once. On desktop the file is read as bytes and the
+			 * Blob is made from them before decoding frees them -- a transient second copy, which is
+			 * affordable on a Mac and is not on a phone. That asymmetry is the whole reason the
+			 * cache stores Blobs.
+			 */
+			const blob =
+				entry.source === "cache"
+					? await readCachedBlob(entry.name)
+					: new Blob([readMedia(entry.path)]);
+			const bytes = await blob.arrayBuffer();
+
 			const started = performance.now();
 			const song = await this.engine.load(bytes, entry.name);
 			this.current = entry;
 			this.duration = song.duration;
 			this.waveform?.setSong(song.peaksSource, song.sampleRate, song.duration);
+
+			// Loading the picture is deliberately not awaited into the failure path above it: a file
+			// whose audio decoded but whose video track this build cannot show should still play.
+			if (entry.video) await this.video?.load(blob);
+			else this.video?.unload();
 			this.resetKnobs();
 			this.syncLoopUi();
 			this.dirty = true;
@@ -1077,6 +1106,9 @@ export class PlayerView extends ItemView {
 			if (playing) this.waveform.follow();
 			this.waveform.draw();
 		}
+
+		// The picture follows the engine, never the other way round.
+		this.video?.follow(position, playing, this.engine.transport.rate);
 
 		if (this.el.clock) {
 			this.el.clock.setText(`${formatTime(position)} / ${formatTime(this.duration)}`);

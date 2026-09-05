@@ -61,23 +61,33 @@ export async function listCached(): Promise<CachedSong[]> {
 	}
 }
 
-export async function readCached(name: string): Promise<ArrayBuffer> {
+/**
+ * The cached file as a Blob.
+ *
+ * ⚠️ Stored as a Blob rather than an ArrayBuffer since v0.4.0, and the reason is video. A Blob can
+ * be handed straight to `URL.createObjectURL` with nothing copied, and the browser may keep it on
+ * disk instead of in memory -- which matters on a phone that is already holding a decoded song
+ * inside the worklet. Rows written by older versions hold an ArrayBuffer, so both are accepted:
+ * a cache that had to be rebuilt would mean re-picking every song by hand.
+ */
+export async function readCachedBlob(name: string): Promise<Blob> {
 	const db = await open();
 	try {
 		const tx = db.transaction(STORE, "readonly");
 		const store = tx.objectStore(STORE);
-		const row = await run(store, store.get(name) as IDBRequest<{ data: ArrayBuffer } | undefined>);
+		const row = await run(store, store.get(name) as IDBRequest<{ data: Blob | ArrayBuffer } | undefined>);
 		if (!row) throw new Error(`“${name}” is not on this device any more.`);
-		return row.data;
+		return row.data instanceof Blob ? row.data : new Blob([row.data]);
 	} finally {
 		db.close();
 	}
 }
 
 export async function cacheSong(file: File): Promise<CachedSong> {
-	const data = await file.arrayBuffer();
+	// The File *is* a Blob, so this stores it without ever reading it into memory.
+	const data = file.slice();
 	const video = /\.(mp4|m4v|mov|webm)$/i.test(file.name);
-	const entry: CachedSong = { name: file.name, bytes: data.byteLength, video, addedAt: Date.now() };
+	const entry: CachedSong = { name: file.name, bytes: file.size, video, addedAt: Date.now() };
 	const db = await open();
 	try {
 		const tx = db.transaction(STORE, "readwrite");
