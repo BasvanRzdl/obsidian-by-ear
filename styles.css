@@ -328,9 +328,28 @@ canvas.by-ear-wave {
 }
 
 .by-ear-player.is-mobile {
+  /* Sized by Obsidian, and it does not scroll -- the scroller inside it does. That is what keeps
+     the transport out from under the app's own bottom chrome.
+     Both `height` and `flex` are set on purpose: `height: 100%` only resolves if the container has
+     a definite height, and `flex: 1` only bites if it is a flex column. Obsidian's view-content has
+     been each of those in different versions, so this covers both rather than betting on one. */
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  gap: 0;
+  padding: 0;
+}
+
+.by-ear-scroll {
+  flex: 1 1 auto;
+  min-height: 0; /* Without this a flex child refuses to shrink and the scrollbar never appears. */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
-  padding: 14px 14px 0;
-  min-height: 100%;
+  padding: 14px 14px 18px;
 }
 
 /* Every target, not just the ones with text in them. */
@@ -391,26 +410,18 @@ canvas.by-ear-wave {
   display: none;
 }
 
-/* --- the thumb zone --- */
+/* --- the thumb zone ---
+ *
+ * The transport is the last child of the view and never scrolls away. No `order` juggling and no
+ * `position: sticky`: DOM order does it, and a flex child cannot escape the box it is in.
+ */
 
-.by-ear-player.is-mobile .by-ear-library { order: 1; }
-.by-ear-player.is-mobile .by-ear-wave-wrap { order: 2; }
-.by-ear-player.is-mobile .by-ear-marks-row { order: 3; }
-.by-ear-player.is-mobile .by-ear-loops { order: 4; }
-.by-ear-player.is-mobile .by-ear-controls { order: 5; }
-.by-ear-player.is-mobile .by-ear-ledger { order: 6; }
-.by-ear-player.is-mobile .by-ear-status { order: 7; }
-
-/* Last, and it stays on screen: the control reached for most is the one furthest from the eyes. */
 .by-ear-player.is-mobile .by-ear-transport {
-  order: 8;
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
+  flex: 0 0 auto;
   justify-content: center;
   flex-wrap: wrap;
-  margin-inline: -14px;
-  padding: 8px 14px calc(14px + env(safe-area-inset-bottom));
+  gap: 10px;
+  padding: 10px 14px calc(12px + env(safe-area-inset-bottom, 0px));
   background: var(--background-primary);
   border-top: 1px solid var(--background-modifier-border);
 }

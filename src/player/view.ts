@@ -106,16 +106,41 @@ export class PlayerView extends ItemView {
 		root.tabIndex = 0;
 
 		// The only thing the phone and the desktop disagree about is where bytes come from. Every
-		// row below this one is identical on both, which is the point of MediaEntry.source.
-		if (Platform.isMobile) root.addClass("is-mobile");
-		this.buildLibraryRow(root);
-		this.buildWaveform(root);
-		this.buildTransport(root);
-		this.buildControls(root);
-		this.buildMarks(root);
-		this.buildLedgerPane(root);
-		this.buildStatus(root);
-		this.buildKeyLegend(root);
+		// control is identical on both, which is the point of MediaEntry.source.
+		if (Platform.isMobile) {
+			/*
+			 * ⚠️ The transport is pinned inside the *view's own box*, not stuck to the viewport.
+			 *
+			 * v0.3.1 used `position: sticky; bottom: 0`, which sticks to the scrollport -- and on
+			 * iPad and iPhone that runs underneath Obsidian's own bottom chrome, so the play button
+			 * was there and unreachable. Guessing the height of that chrome would mean depending on
+			 * an Obsidian internal that is not documented and changes between releases.
+			 *
+			 * So: this element is sized by Obsidian, everything scrolls inside it, and the transport
+			 * is a flex child at its foot. Nothing inside a box Obsidian sized can be covered by
+			 * Obsidian's UI, whatever that UI decides to be next version.
+			 */
+			root.addClass("is-mobile");
+			const scroll = root.createDiv({ cls: "by-ear-scroll" });
+			this.buildLibraryRow(scroll);
+			this.buildWaveform(scroll);
+			this.buildMarks(scroll);
+			this.buildLoops(scroll);
+			this.buildControls(scroll);
+			this.buildLedgerPane(scroll);
+			this.buildStatus(scroll);
+			this.buildTransport(root);
+		} else {
+			this.buildLibraryRow(root);
+			this.buildWaveform(root);
+			this.buildTransport(root);
+			this.buildLoops(root);
+			this.buildControls(root);
+			this.buildMarks(root);
+			this.buildLedgerPane(root);
+			this.buildStatus(root);
+			this.buildKeyLegend(root);
+		}
 
 		this.registerDomEvent(root, "keydown", this.onKeyDown);
 		this.registerDomEvent(window, "resize", () => (this.dirty = true));
@@ -394,7 +419,9 @@ export class PlayerView extends ItemView {
 		button("fast-forward", "Forward 5 s", () => this.engine.nudge(5));
 
 		this.el.clock = row.createDiv({ cls: "by-ear-clock", text: "0:00.000 / 0:00.000" });
+	}
 
+	private buildLoops(root: HTMLElement): void {
 		const loops = root.createDiv({ cls: "by-ear-row by-ear-loops" });
 		const textButton = (text: string, label: string, action: () => void) => {
 			const b = loops.createEl("button", { text, attr: { "aria-label": label } });
