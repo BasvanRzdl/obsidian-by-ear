@@ -3,7 +3,15 @@ import type ByEarPlugin from "../main";
 import { Engine } from "./engine";
 import { Waveform } from "./waveform";
 import { MediaEntry, listMedia, readMedia } from "../media";
-import { KeepAwake, cacheSong, forgetCached, listCached, readCached } from "../mobile";
+import {
+	KeepAwake,
+	cacheSong,
+	claimAudioPlayback,
+	forgetCached,
+	listCached,
+	nudgeAudioSession,
+	readCached,
+} from "../mobile";
 import {
 	LEDGER_MARKER,
 	Ledger,
@@ -121,6 +129,9 @@ export class PlayerView extends ItemView {
 			 * Obsidian's UI, whatever that UI decides to be next version.
 			 */
 			root.addClass("is-mobile");
+			// Declared before anything can play: an iPhone with its ringer switch off mutes all of
+			// Web Audio until it is told this is media playback rather than an interface noise.
+			claimAudioPlayback();
 			const scroll = root.createDiv({ cls: "by-ear-scroll" });
 			this.buildLibraryRow(scroll);
 			this.buildWaveform(scroll);
@@ -411,7 +422,7 @@ export class PlayerView extends ItemView {
 		button("skip-back", "Back to start", () => this.engine.seek(0));
 		button("rewind", "Back 5 s", () => this.engine.nudge(-5));
 		button("chevron-left", "Back 1 s", () => this.engine.nudge(-1));
-		this.el.playButton = button("play", "Play / pause (space)", () => this.engine.toggle());
+		this.el.playButton = button("play", "Play / pause (space)", () => this.togglePlay());
 		// Named rather than found by position: the stylesheet makes this one the big centred target
 		// on mobile, and a CSS rule counting siblings would break the day a button is reordered.
 		this.el.playButton.addClass("by-ear-play");
@@ -675,6 +686,18 @@ export class PlayerView extends ItemView {
 		if (which === "a") this.engine.setLoop(loopA + seconds, loopB);
 		else this.engine.setLoop(loopA, loopB + seconds);
 		this.syncLoopUi();
+	}
+
+	/**
+	 * The single play/pause route.
+	 *
+	 * One method rather than two call sites, because the iOS nudge has to happen inside a real user
+	 * gesture -- and a second entry point that forgot it would be silent only on a phone, only with
+	 * the ringer switch off, which is about the worst bug to go looking for.
+	 */
+	private togglePlay(): void {
+		if (Platform.isMobile) nudgeAudioSession();
+		this.engine.toggle();
 	}
 
 	private toggleLoop(): void {
@@ -960,7 +983,7 @@ export class PlayerView extends ItemView {
 
 		switch (event.key) {
 			case " ":
-				this.engine.toggle();
+				this.togglePlay();
 				break;
 			case "ArrowLeft":
 				this.engine.nudge(shift ? -5 : -1);

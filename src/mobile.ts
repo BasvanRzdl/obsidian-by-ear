@@ -158,3 +158,73 @@ export class KeepAwake {
 interface WakeLockSentinel extends EventTarget {
 	release(): Promise<void>;
 }
+
+/**
+ * Making sound come out of an iPhone.
+ *
+ * ⚠️ WebKit mutes the entire Web Audio API when the ringer switch is off (webkit.org bug 237322).
+ * Not the volume — the physical switch on the side. The iPad has no such switch, which is exactly
+ * why this plugin played fine there and was silent on the phone: same code, different hardware.
+ *
+ * Two layers, because one of them is new:
+ *
+ * 1. `navigator.audioSession.type = "playback"` is the real fix and Safari has implemented it. It
+ *    tells iOS this is media playback rather than an interface noise, and media playback is not
+ *    what the ringer switch is for.
+ * 2. Older iOS has no such API, so the long-standing workaround: play a fraction of a second of
+ *    silence through an `<audio>` element during a user gesture. An `<audio>` element reads
+ *    unambiguously as "the user asked for music", and the audio session follows it.
+ *
+ * Neither can be verified from here -- if the switch still wins, the honest answer is the switch.
+ */
+export function claimAudioPlayback(): void {
+	const nav = navigator as Navigator & { audioSession?: { type: string } };
+	if (nav.audioSession) {
+		try {
+			nav.audioSession.type = "playback";
+		} catch {
+			/* Read-only in some builds; the nudge below is the fallback. */
+		}
+	}
+}
+
+let nudged = false;
+
+/** Must be called from inside a real user gesture, and only earns its keep once per session. */
+export function nudgeAudioSession(): void {
+	if (nudged) return;
+	nudged = true;
+	try {
+		const el = document.createElement("audio");
+		el.src = silentWavUrl();
+		el.volume = 0.01;
+		void el.play().catch(() => undefined);
+	} catch {
+		/* Nothing here is load-bearing: the player works if this does nothing. */
+	}
+}
+
+/** 50 ms of 16-bit silence, built rather than shipped -- no binary in the repo for this. */
+function silentWavUrl(): string {
+	const rate = 44100;
+	const frames = Math.floor(rate * 0.05);
+	const buffer = new ArrayBuffer(44 + frames * 2);
+	const view = new DataView(buffer);
+	const tag = (offset: number, text: string) => {
+		for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+	};
+	tag(0, "RIFF");
+	view.setUint32(4, 36 + frames * 2, true);
+	tag(8, "WAVEfmt ");
+	view.setUint32(16, 16, true); // PCM header length
+	view.setUint16(20, 1, true); // PCM
+	view.setUint16(22, 1, true); // mono
+	view.setUint32(24, rate, true);
+	view.setUint32(28, rate * 2, true); // byte rate
+	view.setUint16(32, 2, true); // block align
+	view.setUint16(34, 16, true); // bits per sample
+	tag(36, "data");
+	view.setUint32(40, frames * 2, true);
+	// The samples themselves stay zero: a fresh ArrayBuffer is already silence.
+	return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+}
