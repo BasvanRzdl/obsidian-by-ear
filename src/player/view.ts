@@ -1,4 +1,4 @@
-import { ItemView, Notice, Platform, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Modal, Notice, Platform, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import type ByEarPlugin from "../main";
 import { Engine } from "./engine";
 import { Waveform } from "./waveform";
@@ -66,6 +66,7 @@ export class PlayerView extends ItemView {
 	private immersive = false;
 	/** Whether *we* took native full screen, as opposed to only drawing the overlay. */
 	private native = false;
+	private home: { parent: HTMLElement | null; next: ChildNode | null } | null = null;
 	/** Whether the ledger holds anything not yet on disk. Drives the receipt, nothing else. */
 	private unsaved = false;
 	/** True only while restoring a note, so putting values back does not count as changing them. */
@@ -89,7 +90,7 @@ export class PlayerView extends ItemView {
 		status: null as HTMLElement | null,
 		filter: null as HTMLInputElement | null,
 		noteLink: null as HTMLElement | null,
-		marks: null as HTMLElement | null,
+		fullscreen: null as HTMLButtonElement | null,
 		findings: null as HTMLTextAreaElement | null,
 		saveState: null as HTMLElement | null,
 	};
@@ -118,45 +119,47 @@ export class PlayerView extends ItemView {
 		// Needed for the keyboard shortcuts to reach us at all.
 		root.tabIndex = 0;
 
-		// The only thing the phone and the desktop disagree about is where bytes come from. Every
-		// control is identical on both, which is the point of MediaEntry.source.
+		/*
+		 * One tree on every platform. CSS decides the shape; nothing here does.
+		 *
+		 * ⚠️ The versions before this had two DOM builds and a pile of absolute positioning, and
+		 * every layout bug came out of that: a picture positioned behind the controls, a rail
+		 * measured on the wrong axis, an overlay that could not escape Obsidian's own transforms.
+		 * The shape below has none of it.
+		 *
+		 *   stage  — the picture and the waveform. Takes whatever room is left over.
+		 *   panel  — everything you press. Its own scroller, with the transport pinned at its foot.
+		 *
+		 * Narrow, the two stack; wide, they sit side by side and the panel becomes a rail. That is a
+		 * single flex-direction flip, and **nothing is ever drawn on top of the picture**.
+		 */
 		if (Platform.isMobile) {
-			/*
-			 * ⚠️ The transport is pinned inside the *view's own box*, not stuck to the viewport.
-			 *
-			 * v0.3.1 used `position: sticky; bottom: 0`, which sticks to the scrollport -- and on
-			 * iPad and iPhone that runs underneath Obsidian's own bottom chrome, so the play button
-			 * was there and unreachable. Guessing the height of that chrome would mean depending on
-			 * an Obsidian internal that is not documented and changes between releases.
-			 *
-			 * So: this element is sized by Obsidian, everything scrolls inside it, and the transport
-			 * is a flex child at its foot. Nothing inside a box Obsidian sized can be covered by
-			 * Obsidian's UI, whatever that UI decides to be next version.
-			 */
 			root.addClass("is-mobile");
+			// A phone and a tablet are both "mobile" to Obsidian and are not the same room: the rail
+			// is 320px on an iPad and 240 on a phone, where 320 would be a third of the screen.
+			if (Platform.isPhone) root.addClass("is-phone");
 			// Declared before anything can play: an iPhone with its ringer switch off mutes all of
 			// Web Audio until it is told this is media playback rather than an interface noise.
 			claimAudioPlayback();
-			const scroll = root.createDiv({ cls: "by-ear-scroll" });
-			this.buildLibraryRow(scroll);
-			this.buildWaveform(scroll);
-			this.buildMarks(scroll);
-			this.buildLoops(scroll);
-			this.buildControls(scroll);
-			this.buildLedgerPane(scroll);
-			this.buildStatus(scroll);
-			this.buildTransport(root);
-		} else {
-			this.buildLibraryRow(root);
-			this.buildWaveform(root);
-			this.buildTransport(root);
-			this.buildLoops(root);
-			this.buildControls(root);
-			this.buildMarks(root);
-			this.buildLedgerPane(root);
-			this.buildStatus(root);
-			this.buildKeyLegend(root);
 		}
+
+		const stage = root.createDiv({ cls: "by-ear-stage" });
+		this.buildWaveform(stage);
+
+		/*
+		 * The rail, in the order a hand reaches for things: move it, loop it, bend it, write it down.
+		 * The song picker and the status line are last because they are the only two that are *not*
+		 * used while playing -- which is also why full screen hides exactly those two.
+		 */
+		const panel = root.createDiv({ cls: "by-ear-panel" });
+		const scroll = panel.createDiv({ cls: "by-ear-scroll" });
+		this.buildTransport(scroll);
+		this.buildLoops(scroll);
+		this.buildControls(scroll);
+		this.buildLedgerPane(scroll);
+		this.buildLibraryRow(scroll);
+		this.buildStatus(scroll);
+		if (!Platform.isMobile) this.buildKeyLegend(scroll);
 
 		this.registerDomEvent(root, "keydown", this.onKeyDown);
 		// A key or a click anywhere brings the controls back, whatever state they were left in --
@@ -173,24 +176,29 @@ export class PlayerView extends ItemView {
 			if (!document.fullscreenElement && this.immersive && this.native) {
 				this.immersive = false;
 				this.native = false;
-				this.contentEl.removeClass("is-immersive");
+				this.restoreFromBody();
 				this.wakeChrome();
-				this.dirty = true;
+				this.relayout();
 			}
 		});
-		this.registerDomEvent(window, "resize", () => {
-			// Rotating a phone changes which axis the film wastes, so the choice is remade.
-			this.layoutImmersive();
-			this.dirty = true;
-		});
+		// Rotating a phone or dragging a pane divider changes which shape fits.
+		this.registerDomEvent(window, "resize", () => this.relayout());
+		if (typeof ResizeObserver !== "undefined") {
+			const observer = new ResizeObserver(() => this.relayout());
+			observer.observe(root);
+			this.register(() => observer.disconnect());
+		}
 		this.engine.onEnded = () => (this.dirty = true);
 
 		void this.refreshLibrary();
+		this.relayout();
 		this.frame();
 	}
 
 	async onClose(): Promise<void> {
 		if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
+		// Obsidian empties this element when the view goes, so it must be back where it belongs.
+		if (this.immersive) this.restoreFromBody();
 		await this.closeLedger();
 		if (this.raf) cancelAnimationFrame(this.raf);
 		this.raf = 0;
@@ -412,6 +420,37 @@ export class PlayerView extends ItemView {
 		});
 	}
 
+	/**
+	 * The strip under the waveform: the controls that act on the waveform itself.
+	 *
+	 * Putting them here rather than in the rail is the whole "controls next to what they affect"
+	 * idea -- `+ Mark` drops a flag on this ruler, and Zoom and Fit change this window. In a rail
+	 * they were four anonymous words among twelve.
+	 */
+	private buildStripTools(host: HTMLElement): void {
+		const tools = host.createDiv({ cls: "by-ear-strip-tools" });
+		const tool = (text: string, label: string, action: () => void) => {
+			const b = tools.createEl("button", { text, cls: "by-ear-tool", attr: { "aria-label": label } });
+			b.addEventListener("click", () => {
+				action();
+				this.dirty = true;
+			});
+		};
+		tool("+ Mark", "Drop a mark at the playhead (m)", () => this.addMark());
+		tool("Zoom", "Zoom to the loop, or in around the playhead", () => {
+			const { loopA, loopB } = this.engine.transport;
+			if (loopA !== null && loopB !== null) this.waveform?.zoomTo(loopA, loopB);
+			else this.waveform?.zoomAround(this.engine.position());
+		});
+		tool("Fit", "Fit the whole song", () => this.waveform?.fit());
+		this.el.fullscreen = tools.createEl("button", {
+			text: "⛶",
+			cls: "by-ear-tool",
+			attr: { "aria-label": "Full screen (f)" },
+		});
+		this.el.fullscreen.addEventListener("click", () => void this.toggleImmersive());
+	}
+
 	private buildWaveform(root: HTMLElement): void {
 		// The picture sits in its own box above the waveform rather than behind it: a waveform drawn
 		// over hands is unreadable, and hands behind a waveform are worse.
@@ -438,12 +477,65 @@ export class PlayerView extends ItemView {
 				this.dirty = true;
 			},
 			onDragPreview: () => (this.dirty = true),
+			onMarkTap: (i) => {
+				const mark = this.ledger.marks[i];
+				if (!mark) return;
+				this.engine.seek(mark.time);
+				this.dirty = true;
+			},
+			onMarkHold: (i) => this.renameMark(i),
 		});
 
 		// The waveform owns its own pointer handling; this just keeps the frame loop awake for it.
 		for (const type of ["pointerdown", "pointermove", "pointerup", "wheel"] as const) {
 			this.registerDomEvent(canvas, type, () => (this.dirty = true));
 		}
+		this.buildStripTools(wrap);
+	}
+
+	/**
+	 * Rename or delete one mark.
+	 *
+	 * A modal rather than an inline field: a flag is a few pixels of canvas, and editing text on a
+	 * canvas means faking a caret. Held for half a second, this is the deliberate gesture -- tapping
+	 * has already been spent on the thing you do ninety-nine times out of a hundred, which is jump
+	 * to the mark.
+	 */
+	private renameMark(index: number): void {
+		const mark = this.ledger.marks[index];
+		if (!mark) return;
+		const modal = new Modal(this.app);
+		modal.titleEl.setText(`Mark at ${formatTime(mark.time)}`);
+		const input = modal.contentEl.createEl("input", {
+			type: "text",
+			cls: "by-ear-rename",
+			attr: { value: mark.name, placeholder: "name this mark" },
+		});
+		const commit = () => {
+			this.ledger.marks[index].name = input.value.trim();
+			this.waveform?.setMarks(this.ledger.marks);
+			this.dirty = true;
+			this.queueSave();
+			modal.close();
+		};
+		input.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") commit();
+		});
+
+		const row = modal.contentEl.createDiv({ cls: "by-ear-rename-row" });
+		const save = row.createEl("button", { text: "Save", cls: "mod-cta" });
+		save.addEventListener("click", commit);
+		const remove = row.createEl("button", { text: "Delete", cls: "mod-warning" });
+		remove.addEventListener("click", () => {
+			this.ledger.marks.splice(index, 1);
+			this.waveform?.setMarks(this.ledger.marks);
+			this.dirty = true;
+			this.queueSave();
+			modal.close();
+		});
+
+		modal.open();
+		window.setTimeout(() => input.focus(), 0);
 	}
 
 	private buildTransport(root: HTMLElement): void {
@@ -486,6 +578,7 @@ export class PlayerView extends ItemView {
 		textButton("Set A", "Set loop start at the playhead (a)", () => this.setLoopEdge("a"));
 		textButton("Set B", "Set loop end at the playhead (b)", () => this.setLoopEdge("b"));
 		this.el.loopToggle = textButton("Loop", "Loop on / off (l)", () => this.toggleLoop());
+		textButton("Loop section", "Loop from the previous mark to the next one (s)", () => this.loopSection());
 		textButton("Clear", "Clear the loop (x)", () => {
 			this.engine.setLoop(null, null);
 			this.syncLoopUi();
@@ -598,21 +691,6 @@ export class PlayerView extends ItemView {
 		});
 	}
 
-	private buildMarks(root: HTMLElement): void {
-		const row = root.createDiv({ cls: "by-ear-row by-ear-marks-row" });
-
-		const add = row.createEl("button", { text: "Mark", attr: { "aria-label": "Drop a mark here (M)" } });
-		add.addEventListener("click", () => this.addMark());
-
-		const section = row.createEl("button", {
-			text: "Loop section",
-			attr: { "aria-label": "Loop from the previous mark to the next one (S)" },
-		});
-		section.addEventListener("click", () => this.loopSection());
-
-		this.el.marks = row.createDiv({ cls: "by-ear-marks" });
-	}
-
 	/**
 	 * The ledger pane: which note this song writes to, and a box to write in.
 	 *
@@ -719,7 +797,7 @@ export class PlayerView extends ItemView {
 			let pictureNote = "";
 			if (entry.video) {
 				const result = await this.video?.load(blob);
-				this.layoutImmersive();
+				this.relayout();
 				if (result && !result.ok) {
 					// Says what went wrong and what it was handed, because the next move depends on
 					// which of those it is -- and a status line that only says "failed" is how the
@@ -854,12 +932,31 @@ export class PlayerView extends ItemView {
 	 */
 	private async toggleImmersive(): Promise<void> {
 		this.immersive = !this.immersive;
-		this.contentEl.toggleClass("is-immersive", this.immersive);
-		this.wakeChrome();
+
+		if (this.immersive) {
+			/*
+			 * ⚠️ The element is moved to `document.body`, and that is not optional.
+			 *
+			 * `position: fixed` resolves against the nearest ancestor with a transform, not against
+			 * the viewport — and Obsidian's mobile shell transforms its panes to slide them. So the
+			 * "full screen" overlay was being trapped inside the leaf: on an iPhone in landscape the
+			 * whole player sat in a corner while Obsidian owned the rest of the screen. Nothing about
+			 * that is fixable in CSS; the element has to leave the transformed subtree.
+			 *
+			 * Reparenting is remembered exactly, and undone on exit and on close, because Obsidian
+			 * still owns this element and will empty it when the view goes.
+			 */
+			this.home = { parent: this.contentEl.parentElement, next: this.contentEl.nextSibling };
+			document.body.appendChild(this.contentEl);
+			this.contentEl.addClass("is-immersive");
+		} else {
+			this.restoreFromBody();
+		}
 
 		const el = this.contentEl as HTMLElement & { requestFullscreen?: () => Promise<void> };
 		try {
 			if (this.immersive) {
+				// An enhancement, never the mechanism: macOS and iPadOS have it, the iPhone does not.
 				if (document.fullscreenEnabled && el.requestFullscreen) {
 					await el.requestFullscreen();
 					this.native = true;
@@ -869,12 +966,18 @@ export class PlayerView extends ItemView {
 				this.native = false;
 			}
 		} catch {
-			// Refused or unsupported: the overlay alone is still a full-screen picture. On the phone
-			// this is the expected path, not an error.
+			// Refused or unsupported. The overlay alone is still a full-screen picture.
 		}
-		// The canvas is sized from its box, and its box just changed.
-		this.layoutImmersive();
-		this.dirty = true;
+		this.relayout();
+	}
+
+	/** Puts the element back exactly where Obsidian left it. */
+	private restoreFromBody(): void {
+		this.contentEl.removeClass("is-immersive");
+		const home = this.home;
+		this.home = null;
+		if (!home?.parent) return;
+		home.parent.insertBefore(this.contentEl, home.next);
 	}
 
 	/**
@@ -907,24 +1010,19 @@ export class PlayerView extends ItemView {
 	 * Only on iPad and iPhone: that is where the question was asked, and the desktop layout is
 	 * already what he wanted. A rail is not obviously better on a wide laptop pane.
 	 */
-	private layoutImmersive(): void {
-		const root = this.contentEl;
-		if (!this.immersive || !Platform.isMobile || !this.video?.hasPicture) {
-			root.removeClass("has-rail");
-			return;
-		}
-		const waveband = 90;
-		const { horizontal } = this.video.gutters(waveband);
-		// Half of the gutter would be free on each side; taking it all from one side keeps the
-		// picture exactly as large as it already was, just no longer centred.
-		const rail = Math.min(320, Math.round(horizontal));
-		if (rail >= 200) {
-			root.style.setProperty("--by-ear-rail", `${rail}px`);
-			root.style.setProperty("--by-ear-waveband", `${waveband}px`);
-			root.addClass("has-rail");
-		} else {
-			root.removeClass("has-rail");
-		}
+	/**
+	 * Side by side, or stacked. The only layout decision left, and it is one line of arithmetic.
+	 *
+	 * ⚠️ Measured on the *player's own box*, not the window: it may be a pane beside other panes, and
+	 * a window-wide test would give a rail to a column too narrow to hold one. The earlier version of
+	 * this measured the film's letterboxing and chose a side rail from it — clever, and wrong twice
+	 * over: it looked at the horizontal gutter when a 16:9 film on a 4:3 iPad wastes the *vertical*
+	 * axis, and it only ever moved controls onto ground the picture had already given up. Whether
+	 * there is room for two columns has nothing to do with the shape of the film.
+	 */
+	private relayout(): void {
+		const box = this.contentEl.getBoundingClientRect();
+		this.contentEl.toggleClass("is-wide", box.width >= 720 && box.width > box.height);
 		this.dirty = true;
 	}
 
@@ -972,42 +1070,10 @@ export class PlayerView extends ItemView {
 		this.dirty = true;
 	}
 
+	/** Marks are drawn on the waveform now, so "rendering" them is one call. */
 	private renderMarks(): void {
-		const host = this.el.marks;
-		if (!host) return;
-		host.empty();
 		this.waveform?.setMarks(this.ledger.marks);
-
-		if (this.ledger.marks.length === 0) {
-			host.createSpan({ cls: "by-ear-marks-empty", text: "no marks yet" });
-			return;
-		}
-
-		this.ledger.marks.forEach((mark, i) => {
-			const chip = host.createDiv({ cls: "by-ear-chip" });
-			const name = chip.createEl("input", {
-				cls: "by-ear-chip-name",
-				attr: { value: mark.name, placeholder: formatTime(mark.time), "aria-label": "Mark name" },
-			});
-			// Click seeks; typing renames. Both on one chip, because a mark you cannot jump to is
-			// just a note about a number.
-			name.addEventListener("focus", () => {
-				this.engine.seek(mark.time);
-				this.dirty = true;
-			});
-			name.addEventListener("input", () => {
-				this.ledger.marks[i].name = name.value;
-				this.waveform?.setMarks(this.ledger.marks);
-				this.dirty = true;
-				this.queueSave();
-			});
-			const remove = chip.createEl("button", { cls: "by-ear-chip-x", text: "×", attr: { "aria-label": "Delete mark" } });
-			remove.addEventListener("click", () => {
-				this.ledger.marks.splice(i, 1);
-				this.renderMarks();
-				this.queueSave();
-			});
-		});
+		this.dirty = true;
 	}
 
 	// ------------------------------------------------------------------ the ledger

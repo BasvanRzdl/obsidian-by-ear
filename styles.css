@@ -34,65 +34,6 @@
   min-width: 12em;
 }
 
-/* --- the picture -----------------------------------------------------------
- *
- * Collapsed to nothing unless there is a video track, so an mp3 looks exactly as it did before this
- * existed. `aspect-ratio` with `object-fit: contain` keeps a 4:3 bootleg and a 16:9 upload in the
- * same box without either being cropped -- and cropping is not a cosmetic question here, because
- * the hands are often at the edge of a badly framed shot.
- */
-
-.by-ear-screen {
-  display: none;
-}
-
-.by-ear-screen.has-video {
-  display: block;
-  width: 100%;
-  background: #000;
-  border-radius: var(--radius-s);
-  overflow: hidden;
-}
-
-.by-ear-video {
-  display: block;
-  width: 100%;
-  max-height: 42vh;
-  aspect-ratio: 16 / 9;
-  object-fit: contain;
-  background: #000;
-}
-
-.by-ear-video.is-hidden {
-  display: none;
-}
-
-/* On a phone the picture is the point: give it room, and let the waveform be the smaller half. */
-.by-ear-player.is-mobile .by-ear-video {
-  max-height: 38vh;
-}
-
-/* --- waveform ------------------------------------------------------------ */
-
-.by-ear-wave-wrap {
-  position: relative;
-  width: 100%;
-  height: 190px;
-  background: var(--background-secondary);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-canvas.by-ear-wave {
-  display: block;
-  width: 100%;
-  height: 100%;
-  /* A crosshair says "this surface is a timeline", which is exactly what it is. */
-  cursor: crosshair;
-  touch-action: none;
-}
-
 /* --- transport ----------------------------------------------------------- */
 
 .by-ear-transport button.by-ear-icon {
@@ -344,347 +285,261 @@ canvas.by-ear-wave {
   font-size: var(--font-ui-small);
 }
 
-/* --- iOS and iPadOS -------------------------------------------------------
+/* ===========================================================================
+ * LAYOUT
  *
- * Sized from the guidelines rather than by eye. Apple's HIG puts the minimum touch target at
- * 44x44pt, Material at 48dp, and WCAG 2.2 at 44x44 CSS px; 48 is used here because it satisfies all
- * three and this is a tool operated while holding a guitar, half-looking, which is worse than the
- * conditions any of those numbers assume.
+ * Two shapes, one tree, and nothing positioned absolutely.
  *
- * ⚠️ The v0.3.0 mistake worth naming: it set `min-height: 44px` and no `min-width`, so every icon
- * button stayed as narrow as its glyph. Half a target is not a target.
+ *   stage — the picture, with the waveform and its tools underneath it.
+ *   panel — everything you press.
  *
- * The layout is reordered rather than redesigned. Research on one-handed use puts primary actions in
- * the bottom third -- roughly three quarters of mobile interaction is thumb-driven -- so the
- * transport moves to the bottom and sticks there, with the play button biggest and centred, the way
- * the iOS camera shutter is. On an iPad, usually on a lap or a stand and worked with two hands, that
- * matters less than raw target size; it costs nothing there, so one layout serves both.
- */
+ * Narrow, they stack; wide, they sit side by side and the panel becomes a left rail. That is a
+ * single flex-direction flip, decided in view.ts from the player's own box (>= 720px and wider than
+ * it is tall), not from the window — the player may be one pane among several.
+ *
+ * ⚠️ Every layout bug up to v0.6.0 came from breaking one of these rules: a picture positioned
+ * behind the controls, a rail measured off the film's letterboxing, an overlay that could not
+ * escape Obsidian's transforms. Nothing here is ever drawn on top of the picture, and nothing
+ * measures anything.
+ * =========================================================================== */
 
-.by-ear-file-input {
-  display: none;
-}
-
-.by-ear-player.is-mobile {
-  /* Sized by Obsidian, and it does not scroll -- the scroller inside it does. That is what keeps
-     the transport out from under the app's own bottom chrome.
-     Both `height` and `flex` are set on purpose: `height: 100%` only resolves if the container has
-     a definite height, and `flex: 1` only bites if it is a flex column. Obsidian's view-content has
-     been each of those in different versions, so this covers both rather than betting on one. */
-  height: 100%;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
+.by-ear-player {
+  flex-direction: column;
   gap: 0;
   padding: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.by-ear-stage {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  background: var(--background-secondary);
+}
+
+.by-ear-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--background-modifier-border);
 }
 
 .by-ear-scroll {
-  flex: 1 1 auto;
-  min-height: 0; /* Without this a flex child refuses to shrink and the scrollbar never appears. */
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 14px 14px 18px;
+  gap: 14px;
+  padding: 12px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
 }
 
-/* Every target, not just the ones with text in them. */
+/* --- wide: the panel becomes the left rail --------------------------------- */
+
+.by-ear-player.is-wide {
+  flex-direction: row;
+}
+
+.by-ear-player.is-wide .by-ear-panel {
+  /* 320px is Apple's own sidebar width in landscape; 240 on a phone, where 320 would be a third
+     of the screen. */
+  flex: 0 0 320px;
+  order: -1; /* Left, as asked. */
+  border-top: none;
+  border-right: 1px solid var(--background-modifier-border);
+}
+
+.by-ear-player.is-wide.is-mobile:not(.is-immersive) .by-ear-panel,
+.by-ear-player.is-wide.is-phone .by-ear-panel {
+  flex-basis: 240px;
+}
+
+/* --- the picture ----------------------------------------------------------- */
+
+.by-ear-screen {
+  display: none;
+}
+
+.by-ear-screen.has-video {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #000;
+  overflow: hidden;
+}
+
+.by-ear-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.by-ear-video.is-hidden {
+  display: none;
+}
+
+/* --- the waveform and its own tools ---------------------------------------- */
+
+.by-ear-wave-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
+  height: 132px;
+  background: var(--background-primary);
+}
+
+.by-ear-player.is-mobile .by-ear-wave-wrap {
+  height: 112px;
+}
+
+.by-ear-wave {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.by-ear-strip-tools {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 6px;
+}
+
+.by-ear-tool {
+  padding: 4px 10px;
+  min-height: 32px;
+  font-size: var(--font-ui-smaller);
+  background: color-mix(in srgb, var(--background-primary) 82%, transparent);
+  cursor: pointer;
+}
+
+.by-ear-player.is-mobile .by-ear-tool {
+  min-height: 44px;
+  min-width: 44px;
+  padding-inline: 14px;
+  font-size: var(--font-ui-small);
+}
+
+/* --- groups inside the rail ------------------------------------------------ */
+
+.by-ear-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.by-ear-transport {
+  justify-content: flex-start;
+}
+
+.by-ear-player.is-wide .by-ear-transport {
+  justify-content: center;
+}
+
+.by-ear-clock {
+  flex-basis: 100%;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.by-ear-player.is-wide .by-ear-clock {
+  text-align: center;
+}
+
+.by-ear-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.by-ear-knob {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* --- touch sizing ---------------------------------------------------------- */
+
 .by-ear-player.is-mobile button,
 .by-ear-player.is-mobile .dropdown,
-.by-ear-player.is-mobile .by-ear-filter,
-.by-ear-player.is-mobile input[type="search"] {
+.by-ear-player.is-mobile .by-ear-filter {
   min-height: 48px;
   min-width: 48px;
   font-size: var(--font-ui-medium);
 }
 
-.by-ear-player.is-mobile button {
-  padding-inline: 16px;
-}
-
-.by-ear-player.is-mobile .by-ear-row {
-  gap: 10px; /* Adjacent targets need space, or the wrong one gets hit. */
-}
-
 .by-ear-player.is-mobile .by-ear-step {
-  width: 56px;
-  font-size: var(--font-ui-large);
+  width: 52px;
 }
 
 .by-ear-player.is-mobile .slider {
-  height: 44px;
+  height: 40px;
 }
 
-.by-ear-player.is-mobile .by-ear-wave-wrap {
-  min-height: 220px;
-}
-
-.by-ear-player.is-mobile .by-ear-chip {
-  padding: 4px 4px 4px 10px;
-  border-radius: 22px;
-}
-
-.by-ear-player.is-mobile .by-ear-chip-name {
-  width: 8em;
-  font-size: var(--font-ui-small);
-  min-height: 40px;
-}
-
-.by-ear-player.is-mobile .by-ear-chip-x {
-  min-width: 40px;
-  min-height: 40px;
-  font-size: var(--font-ui-large);
-}
-
-.by-ear-player.is-mobile .by-ear-findings {
-  min-height: 6em;
-  font-size: var(--font-ui-medium);
-}
-
-/* The keyboard legend is meaningless without a keyboard. */
 .by-ear-player.is-mobile .by-ear-keys {
   display: none;
 }
 
-/* --- the thumb zone ---
- *
- * The transport is the last child of the view and never scrolls away. No `order` juggling and no
- * `position: sticky`: DOM order does it, and a flex child cannot escape the box it is in.
- */
+/* --- notes: present, and as small as it can be ----------------------------- */
 
-.by-ear-player.is-mobile .by-ear-transport {
-  flex: 0 0 auto;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 10px 14px calc(12px + env(safe-area-inset-bottom, 0px));
-  background: var(--background-primary);
-  border-top: 1px solid var(--background-modifier-border);
+.by-ear-findings {
+  width: 100%;
+  min-height: 2.4em;
+  height: 2.4em;
+  resize: vertical;
+  font-size: var(--font-ui-small);
 }
 
-.by-ear-player.is-mobile .by-ear-clock {
-  order: -1;
-  flex-basis: 100%;
-  text-align: center;
+.by-ear-findings:focus {
+  height: 7em;
 }
 
-.by-ear-player.is-mobile .by-ear-transport .by-ear-icon {
-  min-width: 56px;
-  min-height: 56px;
-}
-
-/* The shutter-button principle: the thing pressed most is the biggest and in the middle. */
-.by-ear-player.is-mobile .by-ear-play {
-  min-width: 68px;
-  min-height: 68px;
-  border-radius: 50%;
-  background: var(--interactive-accent);
-  color: var(--text-on-accent);
-}
-
-/* --- immersive mode --------------------------------------------------------
- *
- * A fixed overlay rather than only the Fullscreen API, because the API is not available on iPhone
- * and this has to behave the same on all three devices. Obsidian's interface is HTML in the same
- * document, so covering it is enough to be full screen in every way that matters here; where the
- * real API exists (macOS, iPadOS) it is layered on top and removes the window chrome too.
- *
- * What stays visible is chosen, not inherited: transport, loop, marks, tempo and pitch. A
- * full-screen video with no way to loop a bar would be a worse tool than the small one.
- */
+/* --- full screen ----------------------------------------------------------- */
 
 .by-ear-player.is-immersive {
   position: fixed;
   inset: 0;
   z-index: var(--layer-modal, 100);
   background: var(--background-primary);
-  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
-  gap: 0;
-  overflow: hidden;
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
-/* Everything that is apparatus rather than instrument. */
+/* The only two things not used while playing are the two that go. */
 .by-ear-player.is-immersive .by-ear-library,
-.by-ear-player.is-immersive .by-ear-ledger,
 .by-ear-player.is-immersive .by-ear-status,
 .by-ear-player.is-immersive .by-ear-keys {
   display: none;
 }
 
-.by-ear-player.is-immersive .by-ear-scroll {
-  overflow: hidden;
-  padding: 0;
-  gap: 0;
+.by-ear-player.is-immersive.chrome-hidden .by-ear-panel,
+.by-ear-player.is-immersive.chrome-hidden .by-ear-wave-wrap {
+  display: none;
 }
 
-/* --- the picture takes everything, and the controls float on top ---
- *
- * ⚠️ Stacking them in a column was fine on an iPad and wrong on a phone. A 16:9 picture in a
- * portrait phone is a wide strip whatever you do, so every row above and below it was eating the
- * little height there was: the video ended up genuinely tiny. Overlaid, the picture gets the whole
- * screen and the controls sit on its edges — which is what full-screen video players do, and why.
- *
- * (Portrait is still portrait. A 16:9 frame fills an iPhone properly only in landscape; this makes
- * the box as large as the screen allows, it cannot change the shape of the film.)
- */
+/* --- the rename modal ------------------------------------------------------ */
 
-.by-ear-player.is-immersive .by-ear-screen.has-video {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  border-radius: 0;
-  display: flex;
-}
-
-.by-ear-player.is-immersive .by-ear-video {
-  max-height: none;
+.by-ear-rename {
   width: 100%;
-  height: 100%;
-  aspect-ratio: auto;
-  object-fit: contain;
+  margin-bottom: 12px;
 }
 
-/* Everything else stacks against the bottom edge, above the picture. */
-.by-ear-player.is-immersive .by-ear-scroll {
+.by-ear-rename-row {
+  display: flex;
+  gap: 8px;
   justify-content: flex-end;
 }
 
-.by-ear-player.is-immersive .by-ear-row,
-.by-ear-player.is-immersive .by-ear-controls,
-.by-ear-player.is-immersive .by-ear-wave-wrap,
-.by-ear-player.is-immersive .by-ear-transport {
-  position: relative;
-  z-index: 1;
-}
-
-/* Each strip carries its own ground so it stays readable over any frame of any film. */
-.by-ear-player.is-immersive .by-ear-row,
-.by-ear-player.is-immersive .by-ear-controls,
-.by-ear-player.is-immersive .by-ear-wave-wrap {
-  background: color-mix(in srgb, var(--background-primary) 78%, transparent);
-  backdrop-filter: blur(8px);
-  padding-block: 6px;
-}
-
-.by-ear-player.is-immersive .by-ear-transport {
-  background: color-mix(in srgb, var(--background-primary) 88%, transparent);
-  backdrop-filter: blur(8px);
-  border-top: none;
-}
-
-/* Kept, and kept small: this is how a loop gets set, so losing it would defeat the mode. */
-.by-ear-player.is-immersive .by-ear-wave-wrap {
-  flex: 0 0 auto;
-  min-height: 0;
-  height: 84px;
-}
-
-.by-ear-player.is-immersive.is-mobile .by-ear-wave-wrap {
-  height: 68px;
-}
-
-.by-ear-player.is-immersive .by-ear-transport {
-  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
-}
-
-/* --- hiding the apparatus, on purpose ---
- *
- * ⚠️ There is no timer. Fading the controls after a few seconds is what every video player does, and
- * it is wrong for this one: that pattern is designed for watching, where chrome distracts from the
- * content. Here the loop, the tempo and the marks ARE the content, reached for constantly with both
- * hands on a guitar — so a timeout doubles the cost of every adjustment exactly when hands are
- * least free. Tapping the picture toggles them instead. Deliberate, and it never happens while
- * someone is looking at what it takes away.
- *
- * Fades rather than removes, so nothing reflows and the picture does not jump. Pointer events go
- * with the opacity, so a tap anywhere brings everything back — nobody should have to work out how
- * to return.
- */
-
-.by-ear-player.is-immersive.chrome-hidden .by-ear-wave-wrap,
-.by-ear-player.is-immersive.chrome-hidden .by-ear-row,
-.by-ear-player.is-immersive.chrome-hidden .by-ear-controls,
-.by-ear-player.is-immersive.chrome-hidden .by-ear-marks-row {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.by-ear-player.is-immersive .by-ear-wave-wrap,
-.by-ear-player.is-immersive .by-ear-row,
-.by-ear-player.is-immersive .by-ear-controls,
-.by-ear-player.is-immersive .by-ear-marks-row {
-  transition: opacity 220ms ease;
-}
-
-/* No cursor hiding: the pointer is not noise here, it is how a loop edge gets grabbed. */
-
-/* --- rail layout: the controls live in the film's own dead space ------------
- *
- * Bas's idea, and the better general rule. `object-fit: contain` centres the picture and pads the
- * axis that does not fit, so a 4:3 bootleg on a wide screen leaves two black columns. Standing the
- * controls in that space costs no picture at all, where overlaying always costs some — so the rail
- * is taken only when the measured gutter is wide enough to hold one (>= 200px), and the layout
- * falls back to the overlay when the film genuinely fills the screen.
- *
- * --by-ear-rail is measured per song and per orientation in view.ts; nothing here is a guess about
- * how wide anything is.
- */
-
-.by-ear-player.is-immersive.has-rail .by-ear-screen.has-video {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: var(--by-ear-rail, 280px);
-  bottom: var(--by-ear-waveband, 90px);
-}
-
-/* Under the picture, full width of it: the one control that wants to be wide. */
-.by-ear-player.is-immersive.has-rail .by-ear-wave-wrap {
-  position: absolute;
-  left: 0;
-  right: var(--by-ear-rail, 280px);
-  bottom: 0;
-  height: var(--by-ear-waveband, 90px);
-  background: none;
-  backdrop-filter: none;
-}
-
-/* The rail itself. Scrolls, because a small phone in landscape has little height to give. */
-.by-ear-player.is-immersive.has-rail .by-ear-scroll {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: calc(84px + env(safe-area-inset-bottom, 0px));
-  width: var(--by-ear-rail, 280px);
-  justify-content: flex-start;
-  overflow-y: auto;
-  gap: 10px;
-  padding: 10px;
-}
-
-.by-ear-player.is-immersive.has-rail .by-ear-transport {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  width: var(--by-ear-rail, 280px);
-}
-
-/* Nothing is over the picture any more, so the strips need no ground of their own. */
-.by-ear-player.is-immersive.has-rail .by-ear-row,
-.by-ear-player.is-immersive.has-rail .by-ear-controls {
-  background: none;
-  backdrop-filter: none;
-}
-
-/* In a narrow rail the knobs read better stacked than side by side. */
-.by-ear-player.is-immersive.has-rail .by-ear-controls {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
-}
-
-.by-ear-player.is-immersive.has-rail .by-ear-knob {
-  min-width: 0;
+.by-ear-file-input {
+  display: none;
 }

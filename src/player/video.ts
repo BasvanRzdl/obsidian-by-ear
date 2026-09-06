@@ -142,31 +142,6 @@ export class VideoScreen {
 		this.el.addClass("is-hidden");
 	}
 
-	/**
-	 * How much dead space the film leaves beside itself, in CSS pixels.
-	 *
-	 * `object-fit: contain` centres the picture and pads whichever axis does not fit, so a 4:3
-	 * bootleg on a wide screen leaves two black columns and a 16:9 upload on a tall one leaves two
-	 * black bands. That space is free real estate: putting the controls there costs no picture at
-	 * all, which is strictly better than overlaying them on top of it.
-	 *
-	 * Returns the *total* gutter on each axis, not per side.
-	 */
-	gutters(reservedBottom = 0): { horizontal: number; vertical: number } {
-		const box = this.el.getBoundingClientRect();
-		const w = box.width;
-		const h = box.height - reservedBottom;
-		if (!this.ready || w <= 0 || h <= 0 || !this.el.videoWidth || !this.el.videoHeight) {
-			return { horizontal: 0, vertical: 0 };
-		}
-		const filmAspect = this.el.videoWidth / this.el.videoHeight;
-		const boxAspect = w / h;
-		if (filmAspect > boxAspect) {
-			return { horizontal: 0, vertical: Math.max(0, h - w / filmAspect) };
-		}
-		return { horizontal: Math.max(0, w - h * filmAspect), vertical: 0 };
-	}
-
 	get hasPicture(): boolean {
 		return this.ready;
 	}

@@ -26,9 +26,12 @@ export interface WaveformCallbacks {
 	onLoopChange(a: number | null, b: number | null): void;
 	/** Called while a handle or a new region is being dragged, for a live readout. */
 	onDragPreview(a: number | null, b: number | null): void;
+	/** A flag was tapped (jump there) or held (rename or delete it). */
+	onMarkTap(index: number): void;
+	onMarkHold(index: number): void;
 }
 
-type DragMode = "none" | "pending" | "region" | "handle-a" | "handle-b";
+type DragMode = "none" | "pending" | "region" | "handle-a" | "handle-b" | "flag";
 
 export class Waveform {
 	private canvas: HTMLCanvasElement;
@@ -62,6 +65,9 @@ export class Waveform {
 	private playhead = 0;
 	/** Named points the user dropped. Drawn, never edited here -- the view owns them. */
 	private marks: { time: number; name: string }[] = [];
+	/** Where each flag was last painted, so a finger can be matched to one. */
+	private flagHits: { index: number; x: number; width: number }[] = [];
+	private holdTimer = 0;
 	private loopA: number | null = null;
 	private loopB: number | null = null;
 	private looping = false;
@@ -320,13 +326,14 @@ export class Waveform {
 	 * must never be confused at a glance while playing.
 	 */
 	private drawMarks(width: number, height: number): void {
+		this.flagHits = [];
 		if (this.marks.length === 0) return;
 		const ctx = this.ctx2d;
 		ctx.save();
 		ctx.font = "10px var(--font-interface, sans-serif)";
 		ctx.textBaseline = "top";
-		for (const mark of this.marks) {
-			if (mark.time < this.viewStart || mark.time > this.viewEnd) continue;
+		this.marks.forEach((mark, index) => {
+			if (mark.time < this.viewStart || mark.time > this.viewEnd) return;
 			const x = Math.round(this.timeToX(mark.time, width)) + 0.5;
 			ctx.strokeStyle = this.colors.mark;
 			ctx.lineWidth = 1;
@@ -343,14 +350,16 @@ export class Waveform {
 			ctx.closePath();
 			ctx.fill();
 
-			if (mark.name) {
-				// Flip the label to the left near the right edge so it never runs off the canvas.
-				const w = ctx.measureText(mark.name).width;
-				const left = x + 10 + w > width;
-				ctx.textAlign = left ? "right" : "left";
-				ctx.fillText(mark.name, left ? x - 4 : x + 4, 9);
-			}
-		}
+			const label = mark.name || formatShort(mark.time);
+			// Flip the label to the left near the right edge so it never runs off the canvas.
+			const w = ctx.measureText(label).width;
+			const left = x + 10 + w > width;
+			ctx.textAlign = left ? "right" : "left";
+			ctx.fillText(label, left ? x - 4 : x + 4, 9);
+			// The hit area is the flag plus its label, and never narrower than a fingertip.
+			const span = Math.max(FLAG_HIT_PX, w + 12);
+			this.flagHits.push({ index, x: left ? x - span : x, width: span });
+		});
 		ctx.restore();
 	}
 
@@ -379,6 +388,16 @@ export class Waveform {
 		this.dragOriginTime = time;
 
 		// Grabbing an existing edge is more useful than starting a new region on top of it.
+		// A flag is checked before a loop edge: a mark is a deliberate thing you put there, so
+		// reaching for one should never be misread as starting a drag.
+		const flag = this.flagAt(x, this.eventY(event));
+		if (flag !== null) {
+			this.callbacks.onMarkTap(flag);
+			this.holdTimer = window.setTimeout(() => this.callbacks.onMarkHold(flag), 550);
+			this.drag = "flag";
+			return;
+		}
+
 		const grab = event.pointerType === "mouse" ? HANDLE_GRAB_PX : HANDLE_GRAB_TOUCH_PX;
 		if (this.loopA !== null && Math.abs(x - this.timeToX(this.loopA, width)) <= grab) {
 			this.drag = "handle-a";
@@ -394,6 +413,12 @@ export class Waveform {
 	};
 
 	private onPointerMove = (event: PointerEvent): void => {
+		// Any movement means it was a tap, not a hold.
+		if (this.holdTimer) {
+			window.clearTimeout(this.holdTimer);
+			this.holdTimer = 0;
+		}
+		if (this.drag === "flag") return;
 		if (this.drag === "none" || this.pyramid.length === 0) return;
 		const width = this.canvas.width / dpr();
 		const x = this.eventX(event);
@@ -415,10 +440,25 @@ export class Waveform {
 		this.callbacks.onDragPreview(this.dragA, this.dragB);
 	};
 
+	private clearHold(): void {
+		if (this.holdTimer) window.clearTimeout(this.holdTimer);
+		this.holdTimer = 0;
+	}
+
 	private onPointerUp = (event: PointerEvent): void => {
+		this.clearHold();
 		if (this.drag === "none") return;
 		const mode = this.drag;
 		this.drag = "none";
+		// A flag already did its work on the way down; releasing it must not also seek or loop.
+		if (mode === "flag") {
+			try {
+				this.canvas.releasePointerCapture(event.pointerId);
+			} catch {
+				/* already gone */
+			}
+			return;
+		}
 		try {
 			this.canvas.releasePointerCapture(event.pointerId);
 		} catch {
@@ -476,6 +516,26 @@ export class Waveform {
 	}
 
 	// ------------------------------------------------------------------ geometry
+
+	private eventY(event: PointerEvent): number {
+		return event.clientY - this.canvas.getBoundingClientRect().top;
+	}
+
+	/**
+	 * Which flag, if any, is under a press.
+	 *
+	 * Only the top band counts. The rest of the canvas has to stay free for dragging a loop, and a
+	 * flag that swallowed presses down the whole height would make the waveform unusable wherever a
+	 * mark happened to sit. Later flags win, so the one drawn on top is the one you get.
+	 */
+	private flagAt(x: number, y: number): number | null {
+		if (y > FLAG_BAND_PX) return null;
+		for (let i = this.flagHits.length - 1; i >= 0; i--) {
+			const hit = this.flagHits[i];
+			if (x >= hit.x - 6 && x <= hit.x + hit.width) return hit.index;
+		}
+		return null;
+	}
 
 	private eventX(event: PointerEvent | WheelEvent): number {
 		return event.clientX - this.canvas.getBoundingClientRect().left;
@@ -597,4 +657,15 @@ export function buildPyramid(samples: Float32Array): Float32Array[] {
 		levels.push(next);
 	}
 	return levels;
+}
+
+/** Flags stay grabbable by a fingertip even when their label is one character. */
+const FLAG_HIT_PX = 34;
+/** Only the top strip of the canvas belongs to the flags; below it, the waveform is the target. */
+const FLAG_BAND_PX = 22;
+
+function formatShort(seconds: number): string {
+	const m = Math.floor(seconds / 60);
+	const s = Math.floor(seconds - m * 60);
+	return `${m}:${String(s).padStart(2, "0")}`;
 }
