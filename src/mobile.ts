@@ -15,6 +15,8 @@
  * and it is load-bearing.
  */
 
+import { mimeFor } from "./media";
+
 const DB_NAME = "by-ear";
 const STORE = "media";
 const DB_VERSION = 1;
@@ -77,7 +79,11 @@ export async function readCachedBlob(name: string): Promise<Blob> {
 		const store = tx.objectStore(STORE);
 		const row = await run(store, store.get(name) as IDBRequest<{ data: Blob | ArrayBuffer } | undefined>);
 		if (!row) throw new Error(`“${name}” is not on this device any more.`);
-		return row.data instanceof Blob ? row.data : new Blob([row.data]);
+		const type = mimeFor(name);
+		if (!(row.data instanceof Blob)) return new Blob([row.data], { type });
+		// A Blob cached by an earlier build carries no type, and a typeless blob URL shows nothing
+		// on WebKit. Re-slicing with the type copies no bytes.
+		return row.data.type ? row.data : row.data.slice(0, row.data.size, type);
 	} finally {
 		db.close();
 	}
@@ -85,7 +91,9 @@ export async function readCachedBlob(name: string): Promise<Blob> {
 
 export async function cacheSong(file: File): Promise<CachedSong> {
 	// The File *is* a Blob, so this stores it without ever reading it into memory.
-	const data = file.slice();
+	// ⚠️ `file.slice()` with no arguments drops the type. Passing it explicitly is the whole fix --
+	// and iOS sometimes hands over a File with an empty type, so the extension is the fallback.
+	const data = file.slice(0, file.size, file.type || mimeFor(file.name));
 	const video = /\.(mp4|m4v|mov|webm)$/i.test(file.name);
 	const entry: CachedSong = { name: file.name, bytes: file.size, video, addedAt: Date.now() };
 	const db = await open();

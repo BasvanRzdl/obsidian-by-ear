@@ -16,6 +16,46 @@ export const AUDIO_EXTENSIONS = [".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg"
  *  in 0.6 s. The *picture* is Phase 2; the sound already works. */
 export const VIDEO_EXTENSIONS = [".mp4", ".m4v", ".mov", ".webm"];
 
+/**
+ * The MIME type for a file name.
+ *
+ * ⚠️ Not cosmetic. A blob URL carries no file name, so the type on the Blob is the *only* thing a
+ * `<video>` element has to go on. Chromium sniffs the bytes and plays it anyway; **WebKit does not**
+ * and simply shows nothing. That is why v0.4.0 played video on the Mac and showed a blank box on
+ * iPad and iPhone: three Blobs built without a type, and `Blob.slice()` silently drops the type of
+ * the thing it slices.
+ */
+export function mimeFor(name: string): string {
+	const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+	switch (ext) {
+		case ".mp4":
+		case ".m4v":
+			return "video/mp4";
+		case ".mov":
+			return "video/quicktime";
+		case ".webm":
+			return "video/webm";
+		case ".mp3":
+			return "audio/mpeg";
+		case ".m4a":
+		case ".aac":
+			return "audio/mp4";
+		case ".wav":
+			return "audio/wav";
+		case ".flac":
+			return "audio/flac";
+		case ".ogg":
+		case ".opus":
+			return "audio/ogg";
+		case ".aiff":
+			return "audio/aiff";
+		default:
+			// Better to say nothing than to say something wrong: an empty type lets a sniffing
+			// engine try, where a wrong one would stop it.
+			return "";
+	}
+}
+
 export interface MediaEntry {
 	name: string;
 	/** A filesystem path on desktop; the name again on iOS, where there is no path to have. */

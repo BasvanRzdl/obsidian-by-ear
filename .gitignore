@@ -7,3 +7,4 @@ main.js
 test/ledger.bundle.mjs
 test/waveform.bundle.mjs
 test/video.bundle.mjs
+test/media.bundle.mjs

@@ -549,11 +549,18 @@ canvas.by-ear-wave {
   padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
 }
 
-/* --- auto-hide ---
+/* --- hiding the apparatus, on purpose ---
+ *
+ * ⚠️ There is no timer. Fading the controls after a few seconds is what every video player does, and
+ * it is wrong for this one: that pattern is designed for watching, where chrome distracts from the
+ * content. Here the loop, the tempo and the marks ARE the content, reached for constantly with both
+ * hands on a guitar — so a timeout doubles the cost of every adjustment exactly when hands are
+ * least free. Tapping the picture toggles them instead. Deliberate, and it never happens while
+ * someone is looking at what it takes away.
  *
  * Fades rather than removes, so nothing reflows and the picture does not jump. Pointer events go
- * with it, so a tap anywhere lands on the player and brings everything back — the one rule is that
- * nobody should have to work out how to return.
+ * with the opacity, so a tap anywhere brings everything back — nobody should have to work out how
+ * to return.
  */
 
 .by-ear-player.is-immersive.chrome-hidden .by-ear-wave-wrap,
@@ -571,6 +578,4 @@ canvas.by-ear-wave {
   transition: opacity 220ms ease;
 }
 
-.by-ear-player.is-immersive.chrome-hidden {
-  cursor: none;
-}
+/* No cursor hiding: the pointer is not noise here, it is how a loop edge gets grabbed. */

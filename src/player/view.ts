@@ -3,7 +3,7 @@ import type ByEarPlugin from "../main";
 import { Engine } from "./engine";
 import { Waveform } from "./waveform";
 import { VideoScreen } from "./video";
-import { MediaEntry, listMedia, readMedia } from "../media";
+import { MediaEntry, listMedia, mimeFor, readMedia } from "../media";
 import {
 	KeepAwake,
 	cacheSong,
@@ -64,7 +64,6 @@ export class PlayerView extends ItemView {
 	private wasPlaying = false;
 	private filter = "";
 	private immersive = false;
-	private idleTimer = 0;
 	/** Whether *we* took native full screen, as opposed to only drawing the overlay. */
 	private native = false;
 	/** Whether the ledger holds anything not yet on disk. Drives the receipt, nothing else. */
@@ -160,9 +159,9 @@ export class PlayerView extends ItemView {
 		}
 
 		this.registerDomEvent(root, "keydown", this.onKeyDown);
-		// Any sign of life brings the controls back. Predictability matters more here than tidiness:
+		// A key or a click anywhere brings the controls back, whatever state they were left in --
 		// nobody should ever have to wonder how to get the transport back.
-		for (const type of ["pointermove", "pointerdown", "keydown"] as const) {
+		for (const type of ["pointerdown", "keydown"] as const) {
 			this.registerDomEvent(root, type, () => this.wakeChrome());
 		}
 		// Leaving full screen by Esc or a system gesture must not leave the class behind, or the
@@ -187,7 +186,6 @@ export class PlayerView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
-		if (this.idleTimer) window.clearTimeout(this.idleTimer);
 		if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
 		await this.closeLedger();
 		if (this.raf) cancelAnimationFrame(this.raf);
@@ -413,7 +411,11 @@ export class PlayerView extends ItemView {
 	private buildWaveform(root: HTMLElement): void {
 		// The picture sits in its own box above the waveform rather than behind it: a waveform drawn
 		// over hands is unreadable, and hands behind a waveform are worse.
-		this.video = new VideoScreen(root.createDiv({ cls: "by-ear-screen" }));
+		const screen = root.createDiv({ cls: "by-ear-screen" });
+		this.video = new VideoScreen(screen);
+		// Tap the picture to hide the apparatus and get back to just the hands. The listener is on
+		// the box rather than the video so it still works where the video failed to load.
+		screen.addEventListener("click", () => this.toggleChrome());
 
 		const wrap = root.createDiv({ cls: "by-ear-wave-wrap" });
 		const canvas = wrap.createEl("canvas", { cls: "by-ear-wave" });
@@ -694,7 +696,7 @@ export class PlayerView extends ItemView {
 			const blob =
 				entry.source === "cache"
 					? await readCachedBlob(entry.name)
-					: new Blob([readMedia(entry.path)]);
+					: new Blob([readMedia(entry.path)], { type: mimeFor(entry.name) });
 			const bytes = await blob.arrayBuffer();
 
 			const started = performance.now();
@@ -703,9 +705,11 @@ export class PlayerView extends ItemView {
 			this.duration = song.duration;
 			this.waveform?.setSong(song.peaksSource, song.sampleRate, song.duration);
 
-			// Loading the picture is deliberately not awaited into the failure path above it: a file
-			// whose audio decoded but whose video track this build cannot show should still play.
-			if (entry.video) await this.video?.load(blob);
+			// A file whose audio decoded but whose picture will not show should still play -- but it
+			// must SAY so. A blank box where a video should be is exactly the silent failure this
+			// project keeps relearning: v0.4.0 showed one on iOS for two days and reported nothing.
+			let pictureFailed = false;
+			if (entry.video) pictureFailed = !(await this.video?.load(blob));
 			else this.video?.unload();
 			this.resetKnobs();
 			this.syncLoopUi();
@@ -718,7 +722,8 @@ export class PlayerView extends ItemView {
 			(this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
 			this.setStatus(
 				`${stripExtension(entry.name)} · ${formatTime(song.duration)} · ` +
-					`${song.sampleRate} Hz · decoded in ${Math.round(performance.now() - started)} ms`
+					`${song.sampleRate} Hz · decoded in ${Math.round(performance.now() - started)} ms` +
+					(pictureFailed ? " · ⚠️ sound only — this device would not show the picture" : "")
 			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -852,26 +857,27 @@ export class PlayerView extends ItemView {
 	}
 
 	/**
-	 * Shows the controls and starts the clock on hiding them again.
+	 * Shows the controls again. There is no timer.
 	 *
-	 * Only auto-hides while immersive *and* playing: a paused player is one being read, and controls
-	 * that vanish while you are looking at them are worse than controls that never move. The touch
-	 * delay is longer because there is no `mousemove` to prove someone is still there -- a finger
-	 * that has left the glass is indistinguishable from one about to come back.
+	 * ⚠️ v0.5.0 faded them after a few seconds, which is what every video player does — and it was
+	 * wrong here. That pattern is designed for **watching**, where the chrome is a distraction from
+	 * the content. This is **practising**: the loop, the tempo and the marks *are* the content, and
+	 * they are reached for constantly while both hands are busy on a guitar. Making him tap to
+	 * reveal, then tap the control, doubles the cost of every adjustment at the exact moment his
+	 * hands are least free.
+	 *
+	 * Hiding is still available, because sometimes you only want the hands — but it is a **choice**
+	 * (tap the picture) rather than a timeout. Deliberate, reversible the same way, and it never
+	 * happens while he is looking at something.
 	 */
 	private wakeChrome(): void {
-		if (this.idleTimer) window.clearTimeout(this.idleTimer);
-		this.idleTimer = 0;
 		this.contentEl.removeClass("chrome-hidden");
+	}
+
+	/** Tapping the picture toggles the apparatus. Only in full screen, where there is a reason to. */
+	private toggleChrome(): void {
 		if (!this.immersive) return;
-		this.idleTimer = window.setTimeout(
-			() => {
-				if (this.immersive && this.engine.transport.playing) {
-					this.contentEl.addClass("chrome-hidden");
-				}
-			},
-			Platform.isMobile ? 4000 : 2500
-		);
+		this.contentEl.toggleClass("chrome-hidden", !this.contentEl.hasClass("chrome-hidden"));
 	}
 
 	// ------------------------------------------------------------------ marks

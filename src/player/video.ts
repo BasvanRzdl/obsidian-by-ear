@@ -64,7 +64,7 @@ export class VideoScreen {
 	 * copied, and the browser is free to keep it on disk rather than in memory -- which matters on a
 	 * phone holding a decoded song in the worklet at the same time.
 	 */
-	async load(blob: Blob): Promise<void> {
+	async load(blob: Blob): Promise<boolean> {
 		this.unload();
 		this.url = URL.createObjectURL(blob);
 		this.el.src = this.url;
@@ -96,9 +96,10 @@ export class VideoScreen {
 
 		if (!shown) {
 			this.unload();
-			return;
+			return false;
 		}
 		this.ready = true;
+		return true;
 	}
 
 	unload(): void {
