@@ -178,7 +178,11 @@ export class PlayerView extends ItemView {
 				this.dirty = true;
 			}
 		});
-		this.registerDomEvent(window, "resize", () => (this.dirty = true));
+		this.registerDomEvent(window, "resize", () => {
+			// Rotating a phone changes which axis the film wastes, so the choice is remade.
+			this.layoutImmersive();
+			this.dirty = true;
+		});
 		this.engine.onEnded = () => (this.dirty = true);
 
 		void this.refreshLibrary();
@@ -715,6 +719,7 @@ export class PlayerView extends ItemView {
 			let pictureNote = "";
 			if (entry.video) {
 				const result = await this.video?.load(blob);
+				this.layoutImmersive();
 				if (result && !result.ok) {
 					// Says what went wrong and what it was handed, because the next move depends on
 					// which of those it is -- and a status line that only says "failed" is how the
@@ -868,6 +873,7 @@ export class PlayerView extends ItemView {
 			// this is the expected path, not an error.
 		}
 		// The canvas is sized from its box, and its box just changed.
+		this.layoutImmersive();
 		this.dirty = true;
 	}
 
@@ -887,6 +893,39 @@ export class PlayerView extends ItemView {
 	 */
 	private wakeChrome(): void {
 		this.contentEl.removeClass("chrome-hidden");
+	}
+
+	/**
+	 * Chooses where the controls live in full screen, from the shape of the film.
+	 *
+	 * Bas's idea, and it generalises: a 4:3 bootleg on a wide screen leaves black columns either
+	 * side, and putting the controls in them costs no picture at all — where overlaying always
+	 * costs some. So if the dead space is wide enough to hold a usable rail, take it and stand the
+	 * waveform under the picture; otherwise fall back to overlaying, which is right when the film
+	 * genuinely fills the screen.
+	 *
+	 * Only on iPad and iPhone: that is where the question was asked, and the desktop layout is
+	 * already what he wanted. A rail is not obviously better on a wide laptop pane.
+	 */
+	private layoutImmersive(): void {
+		const root = this.contentEl;
+		if (!this.immersive || !Platform.isMobile || !this.video?.hasPicture) {
+			root.removeClass("has-rail");
+			return;
+		}
+		const waveband = 90;
+		const { horizontal } = this.video.gutters(waveband);
+		// Half of the gutter would be free on each side; taking it all from one side keeps the
+		// picture exactly as large as it already was, just no longer centred.
+		const rail = Math.min(320, Math.round(horizontal));
+		if (rail >= 200) {
+			root.style.setProperty("--by-ear-rail", `${rail}px`);
+			root.style.setProperty("--by-ear-waveband", `${waveband}px`);
+			root.addClass("has-rail");
+		} else {
+			root.removeClass("has-rail");
+		}
+		this.dirty = true;
 	}
 
 	/** Tapping the picture toggles the apparatus. Only in full screen, where there is a reason to. */

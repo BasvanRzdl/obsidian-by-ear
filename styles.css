@@ -619,3 +619,72 @@ canvas.by-ear-wave {
 }
 
 /* No cursor hiding: the pointer is not noise here, it is how a loop edge gets grabbed. */
+
+/* --- rail layout: the controls live in the film's own dead space ------------
+ *
+ * Bas's idea, and the better general rule. `object-fit: contain` centres the picture and pads the
+ * axis that does not fit, so a 4:3 bootleg on a wide screen leaves two black columns. Standing the
+ * controls in that space costs no picture at all, where overlaying always costs some — so the rail
+ * is taken only when the measured gutter is wide enough to hold one (>= 200px), and the layout
+ * falls back to the overlay when the film genuinely fills the screen.
+ *
+ * --by-ear-rail is measured per song and per orientation in view.ts; nothing here is a guess about
+ * how wide anything is.
+ */
+
+.by-ear-player.is-immersive.has-rail .by-ear-screen.has-video {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: var(--by-ear-rail, 280px);
+  bottom: var(--by-ear-waveband, 90px);
+}
+
+/* Under the picture, full width of it: the one control that wants to be wide. */
+.by-ear-player.is-immersive.has-rail .by-ear-wave-wrap {
+  position: absolute;
+  left: 0;
+  right: var(--by-ear-rail, 280px);
+  bottom: 0;
+  height: var(--by-ear-waveband, 90px);
+  background: none;
+  backdrop-filter: none;
+}
+
+/* The rail itself. Scrolls, because a small phone in landscape has little height to give. */
+.by-ear-player.is-immersive.has-rail .by-ear-scroll {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  width: var(--by-ear-rail, 280px);
+  justify-content: flex-start;
+  overflow-y: auto;
+  gap: 10px;
+  padding: 10px;
+}
+
+.by-ear-player.is-immersive.has-rail .by-ear-transport {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: var(--by-ear-rail, 280px);
+}
+
+/* Nothing is over the picture any more, so the strips need no ground of their own. */
+.by-ear-player.is-immersive.has-rail .by-ear-row,
+.by-ear-player.is-immersive.has-rail .by-ear-controls {
+  background: none;
+  backdrop-filter: none;
+}
+
+/* In a narrow rail the knobs read better stacked than side by side. */
+.by-ear-player.is-immersive.has-rail .by-ear-controls {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.by-ear-player.is-immersive.has-rail .by-ear-knob {
+  min-width: 0;
+}
