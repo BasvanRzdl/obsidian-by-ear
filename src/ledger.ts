@@ -52,6 +52,17 @@ export interface Ledger {
 	/** The song's region inside the media file. A 19-minute medley holds more than one song. */
 	mediaStart: number | null;
 	mediaEnd: number | null;
+	/**
+	 * The song's own tempo, tapped by hand.
+	 *
+	 * ⚠️ Deliberately NOT a control and NOT a grid. Bas rejected beat-snapping outright on 6 Sep
+	 * -- "it just seems a lot of risk for errors, and I do not think about bpm while playing
+	 * anyway" -- which is the same objection as chord detection: a machine's opinion about where
+	 * the beat is, drawn over the thing the ear is supposed to decide. What survives is a *fact
+	 * about the song*, tapped once and kept, shown in the Tune tab. The tempo control itself is a
+	 * percentage.
+	 */
+	bpm: number | null;
 }
 
 export function emptyLedger(): Ledger {
@@ -67,6 +78,7 @@ export function emptyLedger(): Ledger {
 		loopOn: false,
 		mediaStart: null,
 		mediaEnd: null,
+		bpm: null,
 	};
 }
 
@@ -297,6 +309,7 @@ export function readLedger(app: App, file: TFile, content: string): Ledger {
 	ledger.loopOn = fm.loop_on === true;
 	ledger.mediaStart = num(fm.media_start);
 	ledger.mediaEnd = num(fm.media_end);
+	ledger.bpm = num(fm.bpm);
 
 	const { below } = splitAtMarker(content);
 	if (!below) return ledger;
@@ -389,6 +402,7 @@ export async function writeLedger(app: App, file: TFile, ledger: Ledger): Promis
 		if (ledger.semitones !== null) fm.pitch = round(ledger.semitones);
 		if (ledger.mediaStart !== null) fm.media_start = round(ledger.mediaStart);
 		if (ledger.mediaEnd !== null) fm.media_end = round(ledger.mediaEnd);
+		if (ledger.bpm !== null) fm.bpm = Math.round(ledger.bpm);
 
 		// A cleared loop must clear the keys, not leave yesterday's numbers sitting in the note --
 		// which is why these are deleted rather than skipped when null.

@@ -1,8 +1,9 @@
-import { ItemView, Modal, Notice, Platform, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Modal, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
 import type ByEarPlugin from "../main";
 import { Engine } from "./engine";
 import { Waveform } from "./waveform";
 import { VideoScreen } from "./video";
+import { LibraryModal } from "./library";
 import { MediaEntry, listMedia, mimeFor, readMedia } from "../media";
 import {
 	KeepAwake,
@@ -44,6 +45,14 @@ const RATE_STEP = 5;
 const SEMITONE_STEP = 1;
 const CENT_STEP = 5;
 
+/** One video frame at 30 fps. Close enough at 24 or 25 to be the right size of nudge. */
+const FRAME = 1 / 30;
+
+/** A tap this long after the previous one starts a new count rather than a very slow tempo. */
+const TAP_RESET_MS = 2500;
+
+type TabId = "marks" | "notes" | "tune";
+
 export class PlayerView extends ItemView {
 	private plugin: ByEarPlugin;
 	private engine = new Engine();
@@ -60,9 +69,9 @@ export class PlayerView extends ItemView {
 	private ledger: Ledger = emptyLedger();
 	private openedAt = 0;
 	private saveTimer = 0;
+	private statusTimer = 0;
 	private awake = new KeepAwake();
 	private wasPlaying = false;
-	private filter = "";
 	private immersive = false;
 	/** Whether *we* took native full screen, as opposed to only drawing the overlay. */
 	private native = false;
@@ -71,28 +80,42 @@ export class PlayerView extends ItemView {
 	private unsaved = false;
 	/** True only while restoring a note, so putting values back does not count as changing them. */
 	private restoring = false;
+	private tab: TabId = "marks";
+	/** Tap timestamps, for tap tempo. Cleared by a long gap, not by a button. */
+	private taps: number[] = [];
+	/** The last tempo he actually worked at, so the swap button has somewhere to go back to. */
+	private workingRate = 0.7;
 
 	private raf = 0;
 	private dirty = true;
 
 	private el = {
-		picker: null as HTMLSelectElement | null,
 		canvas: null as HTMLCanvasElement | null,
+		rail: null as HTMLElement | null,
+		stage: null as HTMLElement | null,
+		songName: null as HTMLElement | null,
+		noteLink: null as HTMLElement | null,
+		report: null as HTMLElement | null,
 		playButton: null as HTMLButtonElement | null,
 		clock: null as HTMLElement | null,
-		loopReadout: null as HTMLElement | null,
+		edgeA: null as HTMLElement | null,
+		edgeB: null as HTMLElement | null,
+		loopLen: null as HTMLElement | null,
 		loopToggle: null as HTMLButtonElement | null,
 		rate: null as HTMLInputElement | null,
 		rateValue: null as HTMLElement | null,
 		semitones: null as HTMLInputElement | null,
 		cents: null as HTMLInputElement | null,
 		pitchValue: null as HTMLElement | null,
-		status: null as HTMLElement | null,
-		filter: null as HTMLInputElement | null,
-		noteLink: null as HTMLElement | null,
+		bpmValue: null as HTMLButtonElement | null,
+		frameRow: null as HTMLElement | null,
 		fullscreen: null as HTMLButtonElement | null,
 		findings: null as HTMLTextAreaElement | null,
 		saveState: null as HTMLElement | null,
+		tabsWrap: null as HTMLElement | null,
+		tabs: [] as HTMLButtonElement[],
+		panes: {} as Record<TabId, HTMLElement>,
+		markList: null as HTMLElement | null,
 	};
 
 	constructor(leaf: WorkspaceLeaf, plugin: ByEarPlugin) {
@@ -120,46 +143,41 @@ export class PlayerView extends ItemView {
 		root.tabIndex = 0;
 
 		/*
-		 * One tree on every platform. CSS decides the shape; nothing here does.
+		 * Four zones, one tree, on every platform. Designed 6 September 2026 (spec §11), after six
+		 * versions of adjusting the stylesheet from screenshots ended with "it looks ugly now".
 		 *
-		 * ⚠️ The versions before this had two DOM builds and a pile of absolute positioning, and
-		 * every layout bug came out of that: a picture positioned behind the controls, a rail
-		 * measured on the wrong axis, an overlay that could not escape Obsidian's own transforms.
-		 * The shape below has none of it.
+		 *   top    — what is playing, how to change it, the way out of full screen.  (Tier 3)
+		 *   rail   — everything the hand reaches for while playing. Never scrolls.   (Tier 1)
+		 *   tabs   — marks, notes, tune. One at a time, and the panel scrolls.       (Tier 2)
+		 *   stage  — the picture, the waveform, and the loop row under it.           (Tier 1)
 		 *
-		 *   stage  — the picture and the waveform. Takes whatever room is left over.
-		 *   panel  — everything you press. Its own scroller, with the transport pinned at its foot.
-		 *
-		 * Narrow, the two stack; wide, they sit side by side and the panel becomes a rail. That is a
-		 * single flex-direction flip, and **nothing is ever drawn on top of the picture**.
+		 * ⚠️ Nothing is ever drawn on top of the waveform. v0.7.0 floated four tools over the exact
+		 * surface they act on; the zoom controls now live *below* it, in the loop row.
 		 */
 		if (Platform.isMobile) {
 			root.addClass("is-mobile");
-			// A phone and a tablet are both "mobile" to Obsidian and are not the same room: the rail
-			// is 320px on an iPad and 240 on a phone, where 320 would be a third of the screen.
 			if (Platform.isPhone) root.addClass("is-phone");
 			// Declared before anything can play: an iPhone with its ringer switch off mutes all of
 			// Web Audio until it is told this is media playback rather than an interface noise.
 			claimAudioPlayback();
 		}
 
-		const stage = root.createDiv({ cls: "by-ear-stage" });
-		this.buildWaveform(stage);
+		this.buildTopBar(root);
 
-		/*
-		 * The rail, in the order a hand reaches for things: move it, loop it, bend it, write it down.
-		 * The song picker and the status line are last because they are the only two that are *not*
-		 * used while playing -- which is also why full screen hides exactly those two.
-		 */
-		const panel = root.createDiv({ cls: "by-ear-panel" });
-		const scroll = panel.createDiv({ cls: "by-ear-scroll" });
-		this.buildTransport(scroll);
-		this.buildLoops(scroll);
-		this.buildControls(scroll);
-		this.buildLedgerPane(scroll);
-		this.buildLibraryRow(scroll);
-		this.buildStatus(scroll);
-		if (!Platform.isMobile) this.buildKeyLegend(scroll);
+		const body = root.createDiv({ cls: "by-ear-body" });
+		const rail = body.createDiv({ cls: "by-ear-rail" });
+		this.el.rail = rail;
+		const stage = body.createDiv({ cls: "by-ear-stage" });
+		this.el.stage = stage;
+
+		this.buildTransport(rail);
+		this.buildMarkRow(rail);
+		this.buildLoopToggleRow(rail);
+		this.buildNudgeRow(rail);
+		this.buildTempo(rail);
+		this.buildTabs(rail);
+
+		this.buildStage(stage);
 
 		this.registerDomEvent(root, "keydown", this.onKeyDown);
 		// A key or a click anywhere brings the controls back, whatever state they were left in --
@@ -202,6 +220,7 @@ export class PlayerView extends ItemView {
 		await this.closeLedger();
 		if (this.raf) cancelAnimationFrame(this.raf);
 		this.raf = 0;
+		window.clearTimeout(this.statusTimer);
 		this.awake.destroy();
 		this.video?.destroy();
 		this.video = null;
@@ -213,7 +232,7 @@ export class PlayerView extends ItemView {
 
 	/** Opens a song by its file name, optionally at a timestamp. The obsidian:// door. */
 	async openByName(name: string, at: number | null): Promise<void> {
-		if (this.library.length === 0) this.refreshLibrary();
+		if (this.library.length === 0) await this.refreshLibrary();
 		const wanted = name.toLowerCase();
 		const entry =
 			this.library.find((e) => e.name.toLowerCase() === wanted) ??
@@ -250,7 +269,7 @@ export class PlayerView extends ItemView {
 			this.library = folder ? listMedia(folder) : [];
 		}
 		this.index = buildIndex(this.app);
-		this.renderPicker();
+		this.renderSongName();
 	}
 
 	/**
@@ -265,7 +284,7 @@ export class PlayerView extends ItemView {
 		const added: string[] = [];
 		const failed: string[] = [];
 		for (const [i, file] of files.entries()) {
-			this.setStatus(`Copying ${i + 1} of ${files.length} — ${file.name}…`);
+			this.setStatus(`Copying ${i + 1} of ${files.length} — ${file.name}…`, true);
 			try {
 				const entry = await cacheSong(file);
 				added.push(entry.name);
@@ -291,20 +310,23 @@ export class PlayerView extends ItemView {
 		}
 	}
 
-	private async forgetCurrent(): Promise<void> {
-		const entry = this.current;
-		if (!entry || entry.source !== "cache") return;
-		await this.closeLedger();
+	private async forget(entry: MediaEntry): Promise<void> {
+		if (entry.source !== "cache") return;
+		if (this.current?.path === entry.path) {
+			await this.closeLedger();
+			this.current = null;
+			this.engine.pause();
+			this.engine.setLoop(null, null);
+			this.video?.unload();
+			this.waveform?.clear();
+			this.duration = 0;
+			this.renderMarks();
+		}
 		await forgetCached(entry.name);
-		this.current = null;
-		this.engine.pause();
-		this.engine.setLoop(null, null);
-		this.video?.unload();
-		this.waveform?.clear();
-		this.duration = 0;
 		await this.refreshLibrary();
 		// The note is untouched on purpose: the media is per-device, the work on the song is not.
-		this.setStatus(`${entry.name} removed from this device. Its note is untouched.`);
+		this.setStatus(`${stripExtension(entry.name)} removed from this device. Its note is untouched.`);
+		this.relayout();
 		this.dirty = true;
 	}
 
@@ -315,143 +337,333 @@ export class PlayerView extends ItemView {
 		return `${entry.name} ${match?.artist ?? ""} ${bands}`.toLowerCase();
 	}
 
-	private renderPicker(): void {
-		const picker = this.el.picker;
-		if (!picker) return;
-		const folder = this.plugin.settings.mediaFolder;
+	// ------------------------------------------------------------------ the control vocabulary
 
-		picker.empty();
-		if (!Platform.isMobile && !folder) {
-			picker.createEl("option", { text: "Set a media folder in settings…", value: "" });
-			picker.disabled = true;
-			return;
-		}
-		if (this.library.length === 0) {
-			picker.createEl("option", {
-				text: Platform.isMobile ? "No songs on this device yet — tap Add…" : "No playable files in that folder",
-				value: "",
-			});
-			picker.disabled = true;
-			return;
-		}
-
-		const shown = this.filter
-			? this.library.filter((e) => this.haystack(e).includes(this.filter))
-			: this.library;
-
-		picker.disabled = false;
-		const label = this.filter
-			? `${shown.length} of ${this.library.length} match “${this.filter}”…`
-			: `Choose a song… (${this.library.length})`;
-		picker.createEl("option", { text: label, value: "" });
-		for (const entry of shown) {
-			picker.createEl("option", {
-				text: `${stripExtension(entry.name)}${entry.video ? "  ▸ video" : ""}`,
-				value: entry.path,
-			});
-		}
-		if (this.current) picker.value = this.current.path;
+	/**
+	 * Every pressable thing in the player is built here, and that is the point.
+	 *
+	 * ⚠️ Real `<button>`s with real accessible names. v0.7.0's icon controls were bare glyphs, and a
+	 * rail reading `⏮ ⚑ ⊖ ⊕ ⛶` is unusable with a screen reader and unreadable to anyone who has
+	 * not been told what it means.
+	 *
+	 * ⚠️ Note what is *not* here any more: the `tabIndex = -1` hack. A focused button swallowing the
+	 * space key was a real problem -- space is play/pause, and the Bluetooth-pedal path (S9) depends
+	 * on it -- but the old fix cost keyboard access, and would have had to be repeated on the
+	 * fourteen controls this version adds. `onKeyDown` now cancels space before the browser turns it
+	 * into a click, so buttons stay focusable and space still plays.
+	 */
+	private button(host: HTMLElement, label: string, aria: string, action: () => void, cls = ""): HTMLButtonElement {
+		const b = host.createEl("button", { cls: `by-ear-b ${cls}`.trim(), attr: { "aria-label": aria } });
+		if (label) b.setText(label);
+		b.addEventListener("click", () => {
+			action();
+			this.dirty = true;
+		});
+		return b;
 	}
 
-	// ------------------------------------------------------------------ layout
-
-	private buildLibraryRow(root: HTMLElement): void {
-		const row = root.createDiv({ cls: "by-ear-row by-ear-library" });
-
-		/*
-		 * One box, matching title, artist and band at once.
-		 *
-		 * Deliberately not a library UI -- the vault is the library (spec section 5d). What makes
-		 * "fat bill" a useful thing to type is that the *notes* already know: a chart carries
-		 * `bands:`, so the filter reads the vault rather than keeping a catalogue of its own.
-		 */
-		const filter = row.createEl("input", {
-			type: "search",
-			cls: "by-ear-filter",
-			attr: { placeholder: "filter — song, artist or band" },
-		});
-		filter.addEventListener("input", () => {
-			this.filter = filter.value.trim().toLowerCase();
-			this.renderPicker();
-		});
-		this.el.filter = filter;
-
-		const picker = row.createEl("select", { cls: "dropdown" });
-		picker.addEventListener("change", () => {
-			const entry = this.library.find((e) => e.path === picker.value);
-			if (entry) void this.openSong(entry);
-		});
-		this.el.picker = picker;
-
-		if (Platform.isMobile) {
-			/*
-			 * One song arrives once, through the Files picker, and is kept in IndexedDB afterwards.
-			 * There is no path to resolve on iOS and no `fs` to resolve it with -- but re-picking a
-			 * song every session would make the plugin unusable, which is what the cache is for.
-			 */
-			const chooser = row.createEl("input", {
-				type: "file",
-				cls: "by-ear-file-input",
-				// `multiple` is the whole mitigation for iOS having no directory access: the folder
-				// cannot be read, but the entire folder can be selected in one go, once, and it is
-				// cached from then on. Adding songs one at a time was never a requirement, only a
-				// consequence of asking for one file.
-				attr: { accept: "audio/*,video/*", multiple: "true", "aria-label": "Add songs from Files" },
-			});
-			const add = row.createEl("button", { text: "Add songs…", attr: { "aria-label": "Add songs from Files" } });
-			add.addEventListener("click", () => chooser.click());
-			chooser.addEventListener("change", () => {
-				const files = Array.from(chooser.files ?? []);
-				chooser.value = "";
-				if (files.length > 0) void this.addFromFiles(files);
-			});
-
-			const forget = row.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Remove this song from the device" } });
-			setIcon(forget, "trash-2");
-			forget.addEventListener("click", () => void this.forgetCurrent());
-			return;
-		}
-
-		const rescan = row.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Re-scan folder" } });
-		setIcon(rescan, "refresh-cw");
-		rescan.addEventListener("click", () => {
-			void this.refreshLibrary();
-			this.setStatus(`${this.library.length} file(s) in the folder.`);
-		});
+	private iconButton(host: HTMLElement, icon: string, aria: string, action: () => void, cls = ""): HTMLButtonElement {
+		const b = this.button(host, "", aria, action, `by-ear-icon ${cls}`.trim());
+		setIcon(b, icon);
+		return b;
 	}
 
 	/**
-	 * The strip under the waveform: the controls that act on the waveform itself.
+	 * A slider between two buttons.
 	 *
-	 * Putting them here rather than in the rail is the whole "controls next to what they affect"
-	 * idea -- `+ Mark` drops a flag on this ruler, and Zoom and Fit change this window. In a rail
-	 * they were four anonymous words among twelve.
+	 * The buttons are why this exists. Bas asked for them on 4 September -- *"I want to be able to
+	 * adjust tempo and pitch using buttons as well as the slider"* -- and on a phone an 18 pt slider
+	 * thumb is not something you aim at with a guitar on your knee.
 	 */
-	private buildStripTools(host: HTMLElement): void {
-		const tools = host.createDiv({ cls: "by-ear-strip-tools" });
-		const tool = (text: string, label: string, action: () => void) => {
-			const b = tools.createEl("button", { text, cls: "by-ear-tool", attr: { "aria-label": label } });
-			b.addEventListener("click", () => {
-				action();
-				this.dirty = true;
-			});
-		};
-		tool("+ Mark", "Drop a mark at the playhead (m)", () => this.addMark());
-		tool("Zoom", "Zoom to the loop, or in around the playhead", () => {
-			const { loopA, loopB } = this.engine.transport;
-			if (loopA !== null && loopB !== null) this.waveform?.zoomTo(loopA, loopB);
-			else this.waveform?.zoomAround(this.engine.position());
-		});
-		tool("Fit", "Fit the whole song", () => this.waveform?.fit());
-		this.el.fullscreen = tools.createEl("button", {
-			text: "⛶",
-			cls: "by-ear-tool",
-			attr: { "aria-label": "Full screen (f)" },
-		});
-		this.el.fullscreen.addEventListener("click", () => void this.toggleImmersive());
+	private stepper(
+		parent: HTMLElement,
+		attr: Record<string, string>,
+		step: number,
+		unit: string,
+		apply: (delta: number) => void
+	): HTMLInputElement {
+		const row = parent.createDiv({ cls: "by-ear-stepper" });
+		this.button(row, "−", `down ${step} ${unit}`, () => apply(-step), "by-ear-step");
+		const slider = row.createEl("input", { type: "range", cls: "slider", attr });
+		this.button(row, "+", `up ${step} ${unit}`, () => apply(step), "by-ear-step");
+		return slider;
 	}
 
-	private buildWaveform(root: HTMLElement): void {
+	// ------------------------------------------------------------------ zone D: the top bar
+
+	/**
+	 * What is playing, how to change it, and the way out of full screen.
+	 *
+	 * ⚠️ This bar exists on **every** surface, and that is the correction the 6 September audit
+	 * forced. The design had filed the song picker under "rare setup" and put it on the Mac only --
+	 * but on iOS the Files picker is the only mechanism by which media exists on the device at all,
+	 * so the plugin could not open a song on the two devices it was written for. It is also the only
+	 * way in and out of full screen on touch, where there is no Esc key.
+	 */
+	private buildTopBar(root: HTMLElement): void {
+		const bar = root.createDiv({ cls: "by-ear-top" });
+
+		const song = this.button(bar, "", "Choose a song", () => this.openLibrary(), "by-ear-song");
+		this.el.songName = song.createSpan({ cls: "by-ear-song-name", text: "Choose a song" });
+		song.createSpan({ cls: "by-ear-song-caret", text: "▾" });
+
+		// Which note the ledger writes to. Shown here where there is width; on touch the same fact
+		// sits beside the notes box instead, which is where the doubt actually happens.
+		this.el.noteLink = bar.createSpan({ cls: "by-ear-note-link" });
+
+		this.button(bar, "Save", "Write the ledger to the note now (Cmd/Ctrl+S)", () => void this.saveLedger(), "by-ear-top-save");
+		this.el.fullscreen = this.button(bar, "⛶", "Full screen (f)", () => void this.toggleImmersive(), "by-ear-icon");
+	}
+
+	private openLibrary(): void {
+		new LibraryModal(this.app, {
+			entries: this.library,
+			haystack: (e) => this.haystack(e),
+			current: this.current,
+			needsFolder: !Platform.isMobile && !this.plugin.settings.mediaFolder,
+			onPick: (entry) => void this.openSong(entry),
+			onAdd: (files) => void this.addFromFiles(files),
+			onForget: (entry) => void this.forget(entry),
+			onRescan: () => {
+				void this.refreshLibrary();
+				this.setStatus(`${this.library.length} file(s) in the folder.`);
+			},
+		}).open();
+	}
+
+	private renderSongName(): void {
+		this.el.songName?.setText(this.current ? stripExtension(this.current.name) : "Choose a song");
+	}
+
+	// ------------------------------------------------------------------ zone B: the rail
+
+	private buildTransport(root: HTMLElement): void {
+		const row = root.createDiv({ cls: "by-ear-row by-ear-transport" });
+		this.iconButton(row, "skip-back", "Back to start", () => this.engine.seek(0));
+		// Dropped only where the row cannot hold four 44 px targets, which is the phone in landscape.
+		this.iconButton(row, "rewind", "Back 5 s", () => this.engine.nudge(-5), "by-ear-tight-drop");
+		// Named rather than found by position: the stylesheet makes this one the big target, and a
+		// CSS rule counting siblings would break the day a button is reordered.
+		this.el.playButton = this.iconButton(row, "play", "Play / pause (space)", () => this.togglePlay(), "by-ear-play");
+		this.iconButton(row, "fast-forward", "Forward 5 s", () => this.engine.nudge(5));
+
+		this.el.clock = root.createDiv({ cls: "by-ear-clock", text: "0:00.000 / 0:00.000" });
+	}
+
+	private buildMarkRow(root: HTMLElement): void {
+		const row = root.createDiv({ cls: "by-ear-row by-ear-markrow" });
+		this.button(row, "◂ ⚑", "Previous mark", () => this.jumpMark(-1));
+		this.button(row, "⚑ Mark", "Drop a mark at the playhead (m)", () => this.addMark(), "by-ear-grow");
+		this.button(row, "⚑ ▸", "Next mark", () => this.jumpMark(1));
+	}
+
+	private buildLoopToggleRow(root: HTMLElement): void {
+		const row = root.createDiv({ cls: "by-ear-row by-ear-looptoggle" });
+		this.el.loopToggle = this.button(row, "Loop", "Loop on / off (l)", () => this.toggleLoop());
+		this.button(row, "Section", "Loop from the previous mark to the next (s)", () => this.loopSection(), "by-ear-grow");
+	}
+
+	/** Fine adjustment of the loop edges. Wide surfaces only -- see the stylesheet. */
+	private buildNudgeRow(root: HTMLElement): void {
+		const row = root.createDiv({ cls: "by-ear-row by-ear-nudgerow by-ear-wide-only" });
+		this.button(row, "A ◂", "Nudge loop start back 10 ms", () => this.nudgeLoopEdge("a", -0.01));
+		this.button(row, "A ▸", "Nudge loop start on 10 ms", () => this.nudgeLoopEdge("a", 0.01));
+		this.button(row, "B ◂", "Nudge loop end back 10 ms", () => this.nudgeLoopEdge("b", -0.01));
+		this.button(row, "B ▸", "Nudge loop end on 10 ms", () => this.nudgeLoopEdge("b", 0.01));
+	}
+
+	/**
+	 * Tempo, as a percentage.
+	 *
+	 * ⚠️ Not a BPM, deliberately. Bas, 6 September: *"I do not want to work with bpm to change the
+	 * tempo, percentages make more sense to me."* A tapped BPM is kept as a fact about the song and
+	 * shown in the Tune tab; it never drives this control.
+	 */
+	private buildTempo(root: HTMLElement): void {
+		const box = root.createDiv({ cls: "by-ear-tempo" });
+		const head = box.createDiv({ cls: "by-ear-tempo-head" });
+		this.el.rateValue = head.createSpan({ cls: "by-ear-tempo-value", text: "100" });
+		head.createSpan({ cls: "by-ear-tempo-unit", text: "%" });
+		// One tap between full speed and whatever he was working at. Hearing it up to speed and then
+		// dropping straight back is a move made constantly, and hunting a slider for it every time
+		// is friction at the exact moment both hands are least free.
+		this.button(head, "⇄ 100%", "Swap between full speed and your working tempo", () => this.swapTempo(), "by-ear-tempo-swap");
+
+		const rate = this.stepper(
+			box,
+			{ min: String(RATE_MIN), max: String(RATE_MAX), step: "1", value: "100", "aria-label": "Tempo, percent" },
+			RATE_STEP,
+			"percent",
+			(delta) => this.adjustRate(delta)
+		);
+		rate.addEventListener("input", () => {
+			this.engine.setRate(Number(rate.value) / 100);
+			this.syncKnobUi();
+			this.dirty = true;
+		});
+		this.el.rate = rate;
+	}
+
+	// ------------------------------------------------------------------ zone C: the tabs
+
+	private buildTabs(root: HTMLElement): void {
+		const wrap = root.createDiv({ cls: "by-ear-tabs-wrap" });
+		this.el.tabsWrap = wrap;
+
+		const strip = wrap.createDiv({ cls: "by-ear-tabs", attr: { role: "tablist" } });
+		const panel = wrap.createDiv({ cls: "by-ear-panel" });
+		this.el.tabs = [];
+
+		const tabs: [TabId, string, string][] = [
+			["marks", "Marks", "⚑"],
+			["notes", "Notes", "✎"],
+			["tune", "Tune", "♯"],
+		];
+		for (const [id, label, glyph] of tabs) {
+			const tab = this.button(strip, "", label, () => this.showTab(id), "by-ear-tab");
+			tab.setAttr("role", "tab");
+			tab.setAttr("data-tab", id);
+			// Both spellings ship, and the stylesheet shows the glyph only where there is no width
+			// for the word. Two DOM builds for one strip is how the phone layouts drifted apart in
+			// the design drafts; one build cannot.
+			tab.createSpan({ cls: "by-ear-tab-word", text: label });
+			tab.createSpan({ cls: "by-ear-tab-glyph", text: glyph });
+			this.el.tabs.push(tab);
+
+			this.el.panes[id] = panel.createDiv({ cls: "by-ear-pane", attr: { "data-pane": id, role: "tabpanel" } });
+		}
+
+		this.el.markList = this.el.panes.marks.createDiv({ cls: "by-ear-marklist" });
+		this.buildNotesPane(this.el.panes.notes);
+		this.buildTunePane(this.el.panes.tune);
+		this.showTab("marks");
+		this.renderMarkList();
+	}
+
+	private showTab(id: TabId): void {
+		this.tab = id;
+		for (const tab of this.el.tabs) tab.setAttr("aria-selected", String(tab.getAttr("data-tab") === id));
+		for (const key of Object.keys(this.el.panes) as TabId[]) this.el.panes[key].hidden = key !== id;
+	}
+
+	/**
+	 * The notes pane: the box, and the receipt.
+	 *
+	 * The box *is* the note's `## Findings` section -- not an inbox that appends. What he types here
+	 * is what the note says, so there is one text and no reconciling to do later.
+	 *
+	 * ⚠️ The receipt sits directly under the box, and that placement is the whole point. The write
+	 * already worked without it -- but it landed at the bottom of a long chart, below a collapsed
+	 * lyrics callout, and said nothing; Bas typed, opened the chart, saw nothing and reasonably
+	 * concluded it was broken. The doubt happens *while typing*, so the evidence belongs there and
+	 * not in a header on the far side of the screen. The v0.7.0 design had removed it entirely.
+	 */
+	private buildNotesPane(root: HTMLElement): void {
+		const findings = root.createEl("textarea", {
+			cls: "by-ear-findings",
+			attr: {
+				placeholder: "What you are hearing — written straight into the song's note.",
+				"aria-label": "Findings, written into the song's note",
+			},
+		});
+		findings.addEventListener("input", () => {
+			this.ledger.findings = findings.value;
+			this.queueSave();
+		});
+		this.el.findings = findings;
+
+		const foot = root.createDiv({ cls: "by-ear-notes-foot" });
+		this.el.saveState = foot.createSpan({ cls: "by-ear-save-state", text: "" });
+		this.button(foot, "Save", "Write the ledger to the note now (Cmd/Ctrl+S)", () => void this.saveLedger(), "by-ear-save");
+	}
+
+	private buildTunePane(root: HTMLElement): void {
+		root.createDiv({ cls: "by-ear-lbl", text: "Pitch" });
+		const semitones = this.stepper(
+			root,
+			{ min: "-12", max: "12", step: "1", value: "0", "aria-label": "Pitch, semitones" },
+			SEMITONE_STEP,
+			"semitone",
+			(delta) => this.adjustPitch(delta)
+		);
+		// The cents buttons move the same single number -- a fraction of a semitone is cents.
+		const cents = this.stepper(
+			root,
+			{ min: "-100", max: "100", step: "1", value: "0", "aria-label": "Pitch, cents" },
+			CENT_STEP,
+			"cents",
+			(delta) => this.adjustPitch(delta / 100)
+		);
+		const applyPitch = () => {
+			// Fractional semitones *are* cents in this engine, so there is one number, not two
+			// systems -- which is why the cents slider costs nothing.
+			this.engine.setSemitones(Number(semitones.value) + Number(cents.value) / 100);
+			this.syncKnobUi();
+			this.dirty = true;
+		};
+		semitones.addEventListener("input", applyPitch);
+		cents.addEventListener("input", applyPitch);
+		this.el.semitones = semitones;
+		this.el.cents = cents;
+		this.el.pitchValue = root.createDiv({ cls: "by-ear-readout", text: "0 st, 0 ¢" });
+
+		root.createDiv({ cls: "by-ear-lbl", text: "Song tempo" });
+		const tapRow = root.createDiv({ cls: "by-ear-row" });
+		this.button(tapRow, "Tap ×4", "Tap in time to record this song's tempo", () => this.tapTempo());
+		this.el.bpmValue = this.button(tapRow, "— bpm", "The song's tapped tempo — press to clear it", () => this.clearTaps());
+
+		// Only where there are frames to step through. Absent on an mp3 rather than greyed out:
+		// nothing in this player is ever disabled.
+		const frame = root.createDiv({ cls: "by-ear-frame" });
+		frame.createDiv({ cls: "by-ear-lbl", text: "Frame" });
+		const frames = frame.createDiv({ cls: "by-ear-row" });
+		this.button(frames, "◂", "Back one frame", () => this.stepFrame(-1));
+		this.button(frames, "▸", "On one frame", () => this.stepFrame(1));
+		this.el.frameRow = frame;
+
+		const reset = root.createDiv({ cls: "by-ear-row by-ear-reset" });
+		this.button(reset, "Reset tempo & pitch", "Reset tempo and pitch (0)", () => this.resetKnobs());
+
+		if (!Platform.isMobile) this.buildKeyLegend(root);
+	}
+
+	/**
+	 * The remaining shortcuts, folded into the Tune tab.
+	 *
+	 * Four of the fourteen are printed on the controls that fire them; these are the other ten. They
+	 * used to have a panel of their own in the view, which is a lot of permanent screen for
+	 * documentation -- but deleting them outright would have taken the only record of `[ ]`, `x`,
+	 * `0` and the wheel, and the pedal path depends on knowing they exist.
+	 */
+	private buildKeyLegend(root: HTMLElement): void {
+		const details = root.createEl("details", { cls: "by-ear-keys" });
+		details.createEl("summary", { text: "Keyboard" });
+		const list = details.createEl("dl");
+		const keys: [string, string][] = [
+			["space", "play / pause"],
+			["← →", "nudge 1 s  (shift: 5 s)"],
+			["⌘/ctrl S", "save the ledger to the note"],
+			["F / esc", "full screen, and back"],
+			["M", "drop a mark here"],
+			["S", "loop this section (mark to mark)"],
+			["A / B", "set loop start / end at the playhead"],
+			["L", "loop on / off"],
+			["X", "clear the loop"],
+			["[ ]", "nudge A by 10 ms  (shift: nudge B)"],
+			["↑ ↓", `tempo ± ${RATE_STEP}%`],
+			["- =", `pitch ± ${SEMITONE_STEP} semitone  (shift: ± ${CENT_STEP} cents)`],
+			["0", "reset tempo and pitch"],
+			["wheel", "zoom around the pointer  (shift: pan)"],
+		];
+		for (const [key, what] of keys) {
+			list.createEl("dt", { text: key });
+			list.createEl("dd", { text: what });
+		}
+	}
+
+	// ------------------------------------------------------------------ zone A: the stage
+
+	private buildStage(root: HTMLElement): void {
 		// The picture sits in its own box above the waveform rather than behind it: a waveform drawn
 		// over hands is unreadable, and hands behind a waveform are worse.
 		const screen = root.createDiv({ cls: "by-ear-screen" });
@@ -460,7 +672,8 @@ export class PlayerView extends ItemView {
 		// the box rather than the video so it still works where the video failed to load.
 		screen.addEventListener("click", () => this.toggleChrome());
 
-		const wrap = root.createDiv({ cls: "by-ear-wave-wrap" });
+		const box = root.createDiv({ cls: "by-ear-wavebox" });
+		const wrap = box.createDiv({ cls: "by-ear-wave-wrap" });
 		const canvas = wrap.createEl("canvas", { cls: "by-ear-wave" });
 		this.el.canvas = canvas;
 
@@ -490,7 +703,64 @@ export class PlayerView extends ItemView {
 		for (const type of ["pointerdown", "pointermove", "pointerup", "wheel"] as const) {
 			this.registerDomEvent(canvas, type, () => (this.dirty = true));
 		}
-		this.buildStripTools(wrap);
+
+		this.buildEdgeRow(box);
+		this.buildReport(box);
+	}
+
+	/**
+	 * Set A, Set B, Clear and the zoom, in one row under the waveform.
+	 *
+	 * ⚠️ A and B are **buttons**, not a readout, and that is the fix for the phone. There is no room
+	 * for a nudge pair on a 369 pt screen, and the waveform there is about 70 pt tall -- so without
+	 * these the only way to make a loop on an iPhone was dragging a sliver of canvas. Tapping the A
+	 * half sets A at the playhead, which is exactly what the `a` key does.
+	 *
+	 * The zoom lives here rather than floating on the waveform, which is what v0.7.0 did: four
+	 * controls painted over the exact surface they act on.
+	 */
+	private buildEdgeRow(host: HTMLElement): void {
+		const row = host.createDiv({ cls: "by-ear-row by-ear-edgerow" });
+
+		const edge = (which: "a" | "b"): HTMLElement => {
+			const b = this.button(
+				row,
+				"",
+				which === "a" ? "Set the loop start at the playhead (a)" : "Set the loop end at the playhead (b)",
+				() => this.setLoopEdge(which),
+				"by-ear-edge"
+			);
+			b.createSpan({ cls: "by-ear-edge-lbl", text: which.toUpperCase() });
+			return b.createSpan({ cls: "by-ear-edge-time", text: "—" });
+		};
+		this.el.edgeA = edge("a");
+		this.el.edgeB = edge("b");
+		this.el.loopLen = row.createDiv({ cls: "by-ear-loop-len", text: "no loop" });
+
+		this.button(row, "✕", "Clear the loop (x)", () => {
+			this.engine.setLoop(null, null);
+			this.syncLoopUi();
+		}, "by-ear-icon");
+		this.button(row, "⊖", "Zoom out", () => this.waveform?.zoomBy(2, this.engine.position()), "by-ear-icon");
+		this.button(row, "⊕", "Zoom in", () => this.waveform?.zoomBy(0.5, this.engine.position()), "by-ear-icon");
+		// A word rather than a glyph: `⤢` was already the full-screen button, and two controls
+		// sharing one glyph is worse at arm's length than it looks on a design sheet.
+		this.button(row, "Fit", "Fit the whole song", () => this.waveform?.fit(), "by-ear-fit");
+	}
+
+	/**
+	 * One line that exists only when there is something to say.
+	 *
+	 * ⚠️ Restored after the 6 September audit found the design had deleted the status line
+	 * altogether. It is the only surface that reports `Reading…`, a bulk import's progress and --
+	 * the one that matters -- `Sound only`, with the MediaError reason and the blob it was handed.
+	 * v0.4.0 showed a blank video box on iOS for two days and said nothing; this is what stopped
+	 * that happening again. Zero height when idle, so it costs nothing on a good day.
+	 */
+	private buildReport(host: HTMLElement): void {
+		const line = host.createDiv({ cls: "by-ear-report", attr: { role: "status" } });
+		line.hidden = true;
+		this.el.report = line;
 	}
 
 	/**
@@ -509,12 +779,11 @@ export class PlayerView extends ItemView {
 		const input = modal.contentEl.createEl("input", {
 			type: "text",
 			cls: "by-ear-rename",
-			attr: { value: mark.name, placeholder: "name this mark" },
+			attr: { value: mark.name, placeholder: "name this mark", "aria-label": "Mark name" },
 		});
 		const commit = () => {
 			this.ledger.marks[index].name = input.value.trim();
-			this.waveform?.setMarks(this.ledger.marks);
-			this.dirty = true;
+			this.renderMarks();
 			this.queueSave();
 			modal.close();
 		};
@@ -528,8 +797,7 @@ export class PlayerView extends ItemView {
 		const remove = row.createEl("button", { text: "Delete", cls: "mod-warning" });
 		remove.addEventListener("click", () => {
 			this.ledger.marks.splice(index, 1);
-			this.waveform?.setMarks(this.ledger.marks);
-			this.dirty = true;
+			this.renderMarks();
 			this.queueSave();
 			modal.close();
 		});
@@ -538,236 +806,12 @@ export class PlayerView extends ItemView {
 		window.setTimeout(() => input.focus(), 0);
 	}
 
-	private buildTransport(root: HTMLElement): void {
-		const row = root.createDiv({ cls: "by-ear-row by-ear-transport" });
-
-		const button = (icon: string, label: string, action: () => void) => {
-			const b = row.createEl("button", { cls: "by-ear-icon", attr: { "aria-label": label } });
-			setIcon(b, icon);
-			b.addEventListener("click", () => {
-				action();
-				this.dirty = true;
-			});
-			return b;
-		};
-
-		button("skip-back", "Back to start", () => this.engine.seek(0));
-		button("rewind", "Back 5 s", () => this.engine.nudge(-5));
-		button("chevron-left", "Back 1 s", () => this.engine.nudge(-1));
-		this.el.playButton = button("play", "Play / pause (space)", () => this.togglePlay());
-		// Named rather than found by position: the stylesheet makes this one the big centred target
-		// on mobile, and a CSS rule counting siblings would break the day a button is reordered.
-		this.el.playButton.addClass("by-ear-play");
-		button("chevron-right", "Forward 1 s", () => this.engine.nudge(1));
-		button("fast-forward", "Forward 5 s", () => this.engine.nudge(5));
-
-		this.el.clock = row.createDiv({ cls: "by-ear-clock", text: "0:00.000 / 0:00.000" });
-	}
-
-	private buildLoops(root: HTMLElement): void {
-		const loops = root.createDiv({ cls: "by-ear-row by-ear-loops" });
-		const textButton = (text: string, label: string, action: () => void) => {
-			const b = loops.createEl("button", { text, attr: { "aria-label": label } });
-			b.addEventListener("click", () => {
-				action();
-				this.dirty = true;
-			});
-			return b;
-		};
-
-		textButton("Set A", "Set loop start at the playhead (a)", () => this.setLoopEdge("a"));
-		textButton("Set B", "Set loop end at the playhead (b)", () => this.setLoopEdge("b"));
-		this.el.loopToggle = textButton("Loop", "Loop on / off (l)", () => this.toggleLoop());
-		textButton("Loop section", "Loop from the previous mark to the next one (s)", () => this.loopSection());
-		textButton("Clear", "Clear the loop (x)", () => {
-			this.engine.setLoop(null, null);
-			this.syncLoopUi();
-		});
-		textButton("Zoom", "Zoom to the loop, or in around the playhead", () => {
-			// It used to do nothing at all unless a loop existed -- a button labelled "Zoom" that
-			// silently ignores you most of the time. With no loop, zoom around the playhead, which
-			// is what the label promises and what the hand reaching for it wants.
-			const { loopA, loopB } = this.engine.transport;
-			if (loopA !== null && loopB !== null) this.waveform?.zoomTo(loopA, loopB);
-			else this.waveform?.zoomAround(this.engine.position());
-		});
-		textButton("Fit", "Fit the whole song", () => this.waveform?.fit());
-		textButton("⛶", "Full screen (f)", () => void this.toggleImmersive());
-
-		this.el.loopReadout = loops.createDiv({ cls: "by-ear-loop-readout", text: "no loop" });
-	}
-
-	/**
-	 * A slider with a - and a + on either side of it.
-	 *
-	 * The slider is for finding a value; the buttons are for landing on one. Dragging to exactly
-	 * -2 semitones is fiddly, pressing - twice is not. Both drive the same number, so this is one
-	 * control with two grips rather than two systems.
-	 */
-	private stepper(
-		parent: HTMLElement,
-		attr: Record<string, string>,
-		step: number,
-		unit: string,
-		apply: (delta: number) => void
-	): HTMLInputElement {
-		const row = parent.createDiv({ cls: "by-ear-stepper" });
-		const button = (text: string, delta: number, how: string) => {
-			const el = row.createEl("button", {
-				text,
-				cls: "by-ear-step",
-				attr: { "aria-label": `${how} ${step} ${unit}` },
-			});
-			// A focused button would swallow the spacebar, and the spacebar is play/pause. Always.
-			el.tabIndex = -1;
-			el.addEventListener("mousedown", (event) => event.preventDefault());
-			el.addEventListener("click", () => {
-				apply(delta);
-				this.dirty = true;
-			});
-		};
-		button("\u2212", -step, "down");
-		const slider = row.createEl("input", { type: "range", cls: "slider", attr });
-		button("+", step, "up");
-		return slider;
-	}
-
-	private buildControls(root: HTMLElement): void {
-		const grid = root.createDiv({ cls: "by-ear-controls" });
-
-		// --- tempo
-		const tempo = grid.createDiv({ cls: "by-ear-knob" });
-		tempo.createDiv({ cls: "by-ear-knob-label", text: "Tempo" });
-		const rate = this.stepper(
-			tempo,
-			{ min: String(RATE_MIN), max: String(RATE_MAX), step: "1", value: "100" },
-			RATE_STEP,
-			"percent",
-			(delta) => this.adjustRate(delta)
-		);
-		rate.addEventListener("input", () => {
-			this.engine.setRate(Number(rate.value) / 100);
-			this.syncKnobUi();
-			this.dirty = true;
-		});
-		this.el.rate = rate;
-		this.el.rateValue = tempo.createDiv({ cls: "by-ear-knob-value", text: "100%" });
-
-		// --- pitch, in two inputs feeding one number
-		const pitch = grid.createDiv({ cls: "by-ear-knob" });
-		pitch.createDiv({ cls: "by-ear-knob-label", text: "Pitch" });
-		const semitones = this.stepper(
-			pitch,
-			{ min: "-12", max: "12", step: "1", value: "0" },
-			SEMITONE_STEP,
-			"semitone",
-			(delta) => this.adjustPitch(delta)
-		);
-		// The cents buttons move the same single number -- a fraction of a semitone is cents.
-		const cents = this.stepper(
-			pitch,
-			{ min: "-100", max: "100", step: "1", value: "0" },
-			CENT_STEP,
-			"cents",
-			(delta) => this.adjustPitch(delta / 100)
-		);
-		const applyPitch = () => {
-			// Fractional semitones *are* cents in this engine, so there is one number, not two
-			// systems -- which is why the cents slider costs nothing.
-			this.engine.setSemitones(Number(semitones.value) + Number(cents.value) / 100);
-			this.syncKnobUi();
-			this.dirty = true;
-		};
-		semitones.addEventListener("input", applyPitch);
-		cents.addEventListener("input", applyPitch);
-		this.el.semitones = semitones;
-		this.el.cents = cents;
-		this.el.pitchValue = pitch.createDiv({ cls: "by-ear-knob-value", text: "0 st, 0 ¢" });
-
-		const reset = grid.createEl("button", { text: "Reset", attr: { "aria-label": "Reset tempo and pitch (0)" } });
-		reset.addEventListener("click", () => {
-			this.resetKnobs();
-			this.dirty = true;
-		});
-	}
-
-	/**
-	 * The ledger pane: which note this song writes to, and a box to write in.
-	 *
-	 * The box *is* the note's `## Findings` section -- not an inbox that appends. What he types
-	 * here is what the note says, so there is one text and no reconciling to do later.
-	 */
-	private buildLedgerPane(root: HTMLElement): void {
-		const wrap = root.createDiv({ cls: "by-ear-ledger" });
-		const head = wrap.createDiv({ cls: "by-ear-ledger-head" });
-		this.el.noteLink = head.createSpan({ cls: "by-ear-note-link", text: "" });
-
-		/*
-		 * A save button, and a receipt saying when it last happened.
-		 *
-		 * The writing already worked without either -- but it wrote to the bottom of a long chart,
-		 * below a collapsed lyrics callout, and said nothing. Bas typed, looked at the chart, saw
-		 * nothing, and reasonably concluded it was broken. A write you cannot see is the same
-		 * problem as a meter you cannot see: it looks like a failure, or worse, like a success.
-		 */
-		const save = head.createEl("button", {
-			text: "Save",
-			cls: "by-ear-save",
-			attr: { "aria-label": "Write the ledger to the note now (Cmd/Ctrl+S)" },
-		});
-		save.addEventListener("click", () => void this.saveLedger());
-		this.el.saveState = head.createSpan({ cls: "by-ear-save-state", text: "" });
-
-		const findings = wrap.createEl("textarea", {
-			cls: "by-ear-findings",
-			attr: { placeholder: "What you are hearing — written straight into the song's note.", rows: "3" },
-		});
-		findings.addEventListener("input", () => {
-			this.ledger.findings = findings.value;
-			this.queueSave();
-		});
-		this.el.findings = findings;
-	}
-
-	private buildStatus(root: HTMLElement): void {
-		const row = root.createDiv({ cls: "by-ear-status" });
-		this.el.status = row.createSpan({ text: "Nothing loaded." });
-		// The dropout meter that used to sit here is gone -- Chromium 142 has no
-		// AudioRenderCapacity, so it never reported. See the note in engine.ts.
-	}
-
-	private buildKeyLegend(root: HTMLElement): void {
-		const details = root.createEl("details", { cls: "by-ear-keys" });
-		details.createEl("summary", { text: "Keyboard" });
-		const list = details.createEl("dl");
-		const keys: [string, string][] = [
-			["space", "play / pause"],
-			["← →", "nudge 1 s  (shift: 5 s)"],
-			["⌘/ctrl S", "save the ledger to the note"],
-			["F / esc", "full screen, and back"],
-			["M", "drop a mark here"],
-			["S", "loop this section (mark to mark)"],
-			["A / B", "set loop start / end at the playhead"],
-			["L", "loop on / off"],
-			["X", "clear the loop"],
-			["[ ]", "nudge A by 10 ms  (shift: nudge B)"],
-			["↑ ↓", `tempo ± ${RATE_STEP}%`],
-			["- =", `pitch ± ${SEMITONE_STEP} semitone  (shift: ± ${CENT_STEP} cents)`],
-			["0", "reset tempo and pitch"],
-			["wheel", "zoom around the pointer  (shift: pan)"],
-		];
-		for (const [key, what] of keys) {
-			list.createEl("dt", { text: key });
-			list.createEl("dd", { text: what });
-		}
-	}
-
 	// ------------------------------------------------------------------ actions
 
 	private async openSong(entry: MediaEntry): Promise<void> {
 		// Whatever the last song learned goes in before the next one is read.
 		await this.closeLedger();
-		this.setStatus(`Reading ${entry.name}…`);
+		this.setStatus(`Reading ${entry.name}…`, true);
 		try {
 			/*
 			 * One read, then one decode. The order matters on a phone.
@@ -790,6 +834,7 @@ export class PlayerView extends ItemView {
 			this.current = entry;
 			this.duration = song.duration;
 			this.waveform?.setSong(song.peaksSource, song.sampleRate, song.duration);
+			this.renderSongName();
 
 			// A file whose audio decoded but whose picture will not show should still play -- but it
 			// must SAY so. A blank box where a video should be is exactly the silent failure this
@@ -797,19 +842,21 @@ export class PlayerView extends ItemView {
 			let pictureNote = "";
 			if (entry.video) {
 				const result = await this.video?.load(blob);
-				this.relayout();
 				if (result && !result.ok) {
 					// Says what went wrong and what it was handed, because the next move depends on
 					// which of those it is -- and a status line that only says "failed" is how the
 					// last fix came to be a guess.
 					pictureNote =
-						` · ⚠️ sound only — ${result.why}` +
-						` [${result.blob.type || "no type"}, ${(result.blob.size / 1e6).toFixed(1)} MB]`;
+						`Sound only — ${result.why}` +
+						` [${result.blob.type || "no type"}, ${(result.blob.size / 1e6).toFixed(1)} MB]. The audio is fine.`;
 				}
 			} else {
 				this.video?.unload();
 			}
+			// After the picture is known, because the layout depends on whether there is one.
+			this.relayout();
 			this.resetKnobs();
+			this.taps = [];
 			this.syncLoopUi();
 			this.dirty = true;
 			// After resetKnobs, so a saved tempo and pitch win over the defaults.
@@ -818,15 +865,19 @@ export class PlayerView extends ItemView {
 			// and `getDisplayText()` is only re-read when the leaf is asked to redraw its header.
 			// That method is real but untyped, so it is reached defensively rather than assumed.
 			(this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
-			this.setStatus(
-				`${stripExtension(entry.name)} · ${formatTime(song.duration)} · ` +
-					`${song.sampleRate} Hz · decoded in ${Math.round(performance.now() - started)} ms` +
-					pictureNote
-			);
+
+			// A warning stays until the next song. A fact about a file that opened perfectly well
+			// does not need to sit under the waveform for the rest of the sitting.
+			if (pictureNote) this.setStatus(pictureNote, true);
+			else
+				this.setStatus(
+					`${stripExtension(entry.name)} · ${formatTime(song.duration)} · ` +
+						`${song.sampleRate} Hz · decoded in ${Math.round(performance.now() - started)} ms`
+				);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			new Notice(`By Ear could not open that file: ${message}`);
-			this.setStatus(`Failed to open ${entry.name} — ${message}`);
+			const why = message(error);
+			new Notice(`By Ear could not open that file: ${why}`);
+			this.setStatus(`Failed to open ${entry.name} — ${why}`, true);
 		}
 	}
 
@@ -859,9 +910,91 @@ export class PlayerView extends ItemView {
 		this.engine.toggle();
 	}
 
+	/**
+	 * ⚠️ Never a silent no-op.
+	 *
+	 * Pressing Loop with no A and B used to flip a flag that had nothing to loop: nothing happened
+	 * and nothing was said -- the same shape as the meter that never reported, the write that landed
+	 * invisibly and the Zoom button that ignored you. So with no loop set, Loop *makes* one: the
+	 * section the playhead is standing in if there are marks, and a two-second region from here if
+	 * there are not. Either way the button does what its label promises.
+	 *
+	 * This is also why Loop is never hidden. "Absent rather than disabled" is right for a control
+	 * that cannot apply -- frame step on an mp3 -- and wrong for one that can always be made to.
+	 */
 	private toggleLoop(): void {
+		if (!this.engine.hasLoop()) {
+			if (this.ledger.marks.length > 0) this.loopSection();
+			else this.setLoopEdge("a");
+			return;
+		}
 		this.engine.setLooping(!this.engine.transport.looping);
 		this.syncLoopUi();
+	}
+
+	/** One tap between full speed and the tempo he was actually working at. */
+	private swapTempo(): void {
+		const rate = this.engine.transport.rate;
+		if (Math.abs(rate - 1) < 0.005) {
+			this.setRate(this.workingRate);
+		} else {
+			this.workingRate = rate;
+			this.setRate(1);
+		}
+	}
+
+	/**
+	 * Tap tempo -- a fact about the song, never a grid.
+	 *
+	 * ⚠️ What this deliberately does NOT do is snap anything. Beat snapping was proposed and Bas
+	 * rejected it on 6 September: *"it just seems a lot of risk for errors, and I do not think about
+	 * bpm while playing anyway."* He was right twice over -- a live recording is not at a constant
+	 * tempo, so the error compounds with distance from any anchor, and a grid drawn on the waveform
+	 * is a machine's opinion about where the beat is. His ear places the loop edge.
+	 *
+	 * Averaged across the whole run of taps rather than the last interval, because one clumsy tap in
+	 * eight should move the answer by an eighth, not replace it.
+	 */
+	private tapTempo(): void {
+		const now = performance.now();
+		const last = this.taps[this.taps.length - 1];
+		if (last !== undefined && now - last > TAP_RESET_MS) this.taps = [];
+		this.taps.push(now);
+		if (this.taps.length > 8) this.taps.shift();
+
+		if (this.taps.length >= 2) {
+			const span = this.taps[this.taps.length - 1] - this.taps[0];
+			const bpm = (60000 * (this.taps.length - 1)) / span;
+			// Outside this range it is a mis-tap, not a tempo.
+			if (bpm >= 30 && bpm <= 300) {
+				this.ledger.bpm = bpm;
+				this.queueSave();
+			}
+		}
+		this.renderBpm();
+	}
+
+	private clearTaps(): void {
+		this.taps = [];
+		this.ledger.bpm = null;
+		this.queueSave();
+		this.renderBpm();
+	}
+
+	private renderBpm(): void {
+		const bpm = this.ledger.bpm;
+		this.el.bpmValue?.setText(bpm === null ? "— bpm" : `${Math.round(bpm)} bpm`);
+	}
+
+	/**
+	 * One frame, on the engine's clock rather than the video's.
+	 *
+	 * Seeking the video element directly would put the picture somewhere the music is not, which is
+	 * the one failure the whole A/V design exists to prevent -- so the transport moves and the
+	 * picture follows it, exactly as it does at every other moment.
+	 */
+	private stepFrame(direction: number): void {
+		this.engine.seek(Math.max(0, Math.min(this.duration, this.engine.position() + direction * FRAME)));
 	}
 
 	private resetKnobs(): void {
@@ -926,9 +1059,6 @@ export class PlayerView extends ItemView {
 	 * own play button. Scrub that and the video moves while the engine does not: the picture would
 	 * be somewhere the music is not, silently, which is the one failure this whole design is built
 	 * to prevent. So it is never called, on any platform.
-	 *
-	 * The controls that stay are the ones this tool is *for* -- transport, loop, marks, tempo and
-	 * pitch. A full-screen video with no way to loop a bar would be a worse tool than the small one.
 	 */
 	private async toggleImmersive(): Promise<void> {
 		this.immersive = !this.immersive;
@@ -986,43 +1116,37 @@ export class PlayerView extends ItemView {
 	 * ⚠️ v0.5.0 faded them after a few seconds, which is what every video player does — and it was
 	 * wrong here. That pattern is designed for **watching**, where the chrome is a distraction from
 	 * the content. This is **practising**: the loop, the tempo and the marks *are* the content, and
-	 * they are reached for constantly while both hands are busy on a guitar. Making him tap to
-	 * reveal, then tap the control, doubles the cost of every adjustment at the exact moment his
-	 * hands are least free.
-	 *
-	 * Hiding is still available, because sometimes you only want the hands — but it is a **choice**
-	 * (tap the picture) rather than a timeout. Deliberate, reversible the same way, and it never
-	 * happens while he is looking at something.
+	 * they are reached for constantly while both hands are busy on a guitar.
 	 */
 	private wakeChrome(): void {
 		this.contentEl.removeClass("chrome-hidden");
 	}
 
 	/**
-	 * Chooses where the controls live in full screen, from the shape of the film.
-	 *
-	 * Bas's idea, and it generalises: a 4:3 bootleg on a wide screen leaves black columns either
-	 * side, and putting the controls in them costs no picture at all — where overlaying always
-	 * costs some. So if the dead space is wide enough to hold a usable rail, take it and stand the
-	 * waveform under the picture; otherwise fall back to overlaying, which is right when the film
-	 * genuinely fills the screen.
-	 *
-	 * Only on iPad and iPhone: that is where the question was asked, and the desktop layout is
-	 * already what he wanted. A rail is not obviously better on a wide laptop pane.
-	 */
-	/**
-	 * Side by side, or stacked. The only layout decision left, and it is one line of arithmetic.
+	 * Side by side or stacked — and where the tabs live.
 	 *
 	 * ⚠️ Measured on the *player's own box*, not the window: it may be a pane beside other panes, and
-	 * a window-wide test would give a rail to a column too narrow to hold one. The earlier version of
-	 * this measured the film's letterboxing and chose a side rail from it — clever, and wrong twice
-	 * over: it looked at the horizontal gutter when a 16:9 film on a 4:3 iPad wastes the *vertical*
-	 * axis, and it only ever moved controls onto ground the picture had already given up. Whether
-	 * there is room for two columns has nothing to do with the shape of the film.
+	 * a window-wide test would give a rail to a column too narrow to hold one.
+	 *
+	 * The second decision is new in v0.8.0. With no picture, the room the picture is not using is
+	 * **wide**, and a 256 px rail is the wrong place to spend it — so the tabs and their panel move
+	 * down into the stage, where Notes gets a page instead of a slot. They travel together, because
+	 * a tab strip has to sit directly above the thing it switches: the rule is the relationship, not
+	 * the location.
 	 */
 	private relayout(): void {
 		const box = this.contentEl.getBoundingClientRect();
-		this.contentEl.toggleClass("is-wide", box.width >= 720 && box.width > box.height);
+		const wide = box.width >= 720 && box.width > box.height;
+		this.contentEl.toggleClass("is-wide", wide);
+
+		const hasPicture = this.video?.hasPicture === true;
+		this.contentEl.toggleClass("has-video", hasPicture);
+		if (this.el.frameRow) this.el.frameRow.hidden = !hasPicture;
+
+		const wrap = this.el.tabsWrap;
+		const host = wide && !hasPicture ? this.el.stage : this.el.rail;
+		if (wrap && host && wrap.parentElement !== host) host.appendChild(wrap);
+
 		this.dirty = true;
 	}
 
@@ -1035,7 +1159,10 @@ export class PlayerView extends ItemView {
 	// ------------------------------------------------------------------ marks
 
 	private addMark(): void {
-		if (!this.note) return;
+		if (!this.note) {
+			this.setStatus("Open a song first — a mark has to be written into its note.", true);
+			return;
+		}
 		const time = this.engine.position();
 		// A mark within a few frames of an existing one is a double-press, not a second mark.
 		if (this.ledger.marks.some((m) => Math.abs(m.time - time) < 0.05)) return;
@@ -1043,6 +1170,22 @@ export class PlayerView extends ItemView {
 		this.ledger.marks.sort((a, b) => a.time - b.time);
 		this.renderMarks();
 		this.queueSave();
+	}
+
+	/** Previous or next mark from where the playhead stands. */
+	private jumpMark(direction: number): void {
+		const marks = this.ledger.marks;
+		if (marks.length === 0) return;
+		const at = this.engine.position();
+		// The back-step tolerance is wider than the forward one on purpose: pressing "previous"
+		// just after a mark passed means "that one again", not "the one before it".
+		const target =
+			direction < 0
+				? [...marks].reverse().find((m) => m.time < at - 0.25)
+				: marks.find((m) => m.time > at + 0.05);
+		if (!target) return;
+		this.engine.seek(target.time);
+		this.dirty = true;
 	}
 
 	/**
@@ -1054,7 +1197,9 @@ export class PlayerView extends ItemView {
 	private loopSection(): void {
 		const marks = this.ledger.marks;
 		if (marks.length === 0) {
-			new Notice("By Ear: drop a mark or two first (M).");
+			// Not a Notice that leaves nothing behind: make the loop it could not find.
+			this.setLoopEdge("a");
+			this.setStatus("No marks yet, so this is a two-second loop from here. ⚑ Mark drops one.");
 			return;
 		}
 		const at = this.engine.position();
@@ -1070,10 +1215,51 @@ export class PlayerView extends ItemView {
 		this.dirty = true;
 	}
 
-	/** Marks are drawn on the waveform now, so "rendering" them is one call. */
+	/** Marks live in two places: flags on the waveform, and rows in the Marks tab. */
 	private renderMarks(): void {
 		this.waveform?.setMarks(this.ledger.marks);
+		this.renderMarkList();
 		this.dirty = true;
+	}
+
+	private renderMarkList(): void {
+		const list = this.el.markList;
+		if (!list) return;
+		list.empty();
+		if (this.ledger.marks.length === 0) {
+			list.createDiv({
+				cls: "by-ear-empty",
+				text: this.current
+					? "No marks yet. ⚑ Mark drops one where the playhead is."
+					: "Choose a song to start marking it up.",
+			});
+			return;
+		}
+		this.ledger.marks.forEach((mark, i) => {
+			const row = list.createDiv({ cls: "by-ear-mk" });
+			const jump = this.button(
+				row,
+				"",
+				`Jump to ${mark.name || "the mark"} at ${formatTime(mark.time)}`,
+				() => {
+					this.engine.seek(mark.time);
+					this.dirty = true;
+				},
+				"by-ear-mk-jump"
+			);
+			jump.createSpan({ cls: "by-ear-mk-flag" });
+			jump.createSpan({ cls: "by-ear-mk-name", text: mark.name || "unnamed" });
+			jump.createSpan({ cls: "by-ear-mk-time", text: formatTime(mark.time).slice(0, -4) });
+			// A visible rename control as well as the 550 ms hold on the flag: a gesture nobody has
+			// been told about is not an affordance, and a hold cannot be reached from a keyboard.
+			this.iconButton(
+				row,
+				"pencil",
+				`Rename or delete the mark at ${formatTime(mark.time)}`,
+				() => this.renameMark(i),
+				"by-ear-mk-edit"
+			);
+		});
 	}
 
 	// ------------------------------------------------------------------ the ledger
@@ -1116,7 +1302,9 @@ export class PlayerView extends ItemView {
 
 		if (this.el.findings) this.el.findings.value = this.ledger.findings;
 		this.renderMarks();
+		this.renderBpm();
 		this.renderNoteLink();
+		this.renderSaveState("", false);
 		this.syncLoopUi();
 		this.dirty = true;
 	}
@@ -1125,10 +1313,7 @@ export class PlayerView extends ItemView {
 		const el = this.el.noteLink;
 		if (!el) return;
 		el.empty();
-		if (!this.note) {
-			el.setText("no note");
-			return;
-		}
+		if (!this.note) return;
 		const how = { media: "bound", chart: "chart", study: "study", byear: "by-ear note" }[this.note.how];
 		el.createSpan({ text: "writing to " });
 		const link = el.createEl("a", { text: this.note.file.basename, href: "#" });
@@ -1151,19 +1336,20 @@ export class PlayerView extends ItemView {
 		await leaf.openFile(file, { eState: { line } });
 	}
 
+	/** The receipt. With nothing to report it names the note, so the destination is never a mystery. */
+	private renderSaveState(text: string, pending: boolean): void {
+		const el = this.el.saveState;
+		if (!el) return;
+		el.setText(text || (this.note ? `→ ${this.note.file.basename}` : ""));
+		el.toggleClass("is-pending", pending);
+	}
+
 	/**
 	 * Saves a second after the last change rather than on every keystroke.
 	 *
 	 * The note may be open in an editor and syncing to an iPad at the same time, and `vault.process`
 	 * rewrites the whole file. Debouncing keeps that to once per thought instead of once per letter.
 	 */
-	private renderSaveState(text: string, pending: boolean): void {
-		const el = this.el.saveState;
-		if (!el) return;
-		el.setText(text);
-		el.toggleClass("is-pending", pending);
-	}
-
 	private queueSave(): void {
 		this.unsaved = true;
 		this.renderSaveState("unsaved…", true);
@@ -1184,7 +1370,7 @@ export class PlayerView extends ItemView {
 			this.renderSaveState(`saved ${time} → ${this.note.file.basename}`, false);
 		} catch (error) {
 			this.renderSaveState("could not save", true);
-			new Notice(`By Ear could not write the note: ${error instanceof Error ? error.message : error}`);
+			new Notice(`By Ear could not write the note: ${message(error)}`);
 		}
 	}
 
@@ -1218,6 +1404,21 @@ export class PlayerView extends ItemView {
 		if ((event.metaKey || event.ctrlKey) && (event.key === "s" || event.key === "S")) {
 			event.preventDefault();
 			void this.saveLedger();
+			return;
+		}
+		/*
+		 * ⚠️ Space belongs to play/pause, whatever has focus.
+		 *
+		 * A focused button turns the space key into a click on itself, so tapping any control once
+		 * would quietly steal the spacebar -- and the spacebar is also the Bluetooth-pedal path
+		 * (S9). v0.7.0 solved that by making two stepper buttons unfocusable, which cost keyboard
+		 * access and would have had to be repeated on the fourteen controls added here. Cancelling
+		 * the key stops the browser synthesising the click, and every button stays reachable.
+		 */
+		if (event.key === " " && target?.tagName === "BUTTON") {
+			event.preventDefault();
+			this.togglePlay();
+			this.dirty = true;
 			return;
 		}
 		// Let a focused slider keep its own arrow keys.
@@ -1340,25 +1541,24 @@ export class PlayerView extends ItemView {
 		// The picture follows the engine, never the other way round.
 		this.video?.follow(position, playing, this.engine.transport.rate);
 
-		if (this.el.clock) {
-			this.el.clock.setText(`${formatTime(position)} / ${formatTime(this.duration)}`);
-		}
+		this.el.clock?.setText(`${formatTime(position)} / ${formatTime(this.duration)}`);
 		if (this.el.playButton) {
 			setIcon(this.el.playButton, playing ? "pause" : "play");
+			// ⚠️ Lit only while playing. Filled means *engaged* and nothing else -- a permanently
+			// filled Play would make it mean "primary" here and "engaged" everywhere else, and that
+			// two-weight vocabulary is the whole reason the screen reads at a glance.
+			this.el.playButton.toggleClass("is-on", playing);
 		}
 	}
 
 	private syncLoopUi(): void {
 		this.captureTransport();
 		const { loopA, loopB, looping } = this.engine.transport;
-		if (this.el.loopReadout) {
-			this.el.loopReadout.setText(
-				loopA === null || loopB === null
-					? "no loop"
-					: `A ${formatTime(loopA)} → B ${formatTime(loopB)}  (${(loopB - loopA).toFixed(3)} s)`
-			);
-		}
-		this.el.loopToggle?.toggleClass("is-active", looping);
+		const has = loopA !== null && loopB !== null;
+		this.el.edgeA?.setText(has ? formatTime(loopA as number) : "—");
+		this.el.edgeB?.setText(has ? formatTime(loopB as number) : "—");
+		this.el.loopLen?.setText(has ? `${((loopB as number) - (loopA as number)).toFixed(2)} s` : "no loop");
+		this.el.loopToggle?.toggleClass("is-on", looping);
 	}
 
 	/**
@@ -1386,7 +1586,7 @@ export class PlayerView extends ItemView {
 	private syncKnobUi(): void {
 		this.captureTransport();
 		const { rate, semitones } = this.engine.transport;
-		if (this.el.rateValue) this.el.rateValue.setText(`${Math.round(rate * 100)}%`);
+		this.el.rateValue?.setText(String(Math.round(rate * 100)));
 		if (this.el.pitchValue) {
 			const whole = semitones < 0 ? Math.ceil(semitones) : Math.floor(semitones);
 			const cents = Math.round((semitones - whole) * 100);
@@ -1394,8 +1594,26 @@ export class PlayerView extends ItemView {
 		}
 	}
 
-	private setStatus(text: string): void {
-		this.el.status?.setText(text);
+	/**
+	 * The report line. Empty means gone, not blank.
+	 *
+	 * `sticky` is the difference between a fact and a warning: a decode time is worth saying once
+	 * and then getting out of the way, while `Sound only` has to stay until the next song, because
+	 * it answers a question the user has not thought to ask yet.
+	 */
+	private setStatus(text: string, sticky = false): void {
+		const el = this.el.report;
+		if (!el) return;
+		window.clearTimeout(this.statusTimer);
+		el.setText(text);
+		el.toggleClass("is-warn", sticky && text.length > 0);
+		el.hidden = text.length === 0;
+		if (text.length > 0 && !sticky) {
+			this.statusTimer = window.setTimeout(() => {
+				el.setText("");
+				el.hidden = true;
+			}, 6000);
+		}
 	}
 }
 

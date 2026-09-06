@@ -174,7 +174,19 @@ export class Waveform {
 
 	/** Halves the visible span around a point. What "Zoom" means when there is no loop to zoom to. */
 	zoomAround(time: number): void {
-		const span = (this.viewEnd - this.viewStart) / 2;
+		this.zoomBy(0.5, time);
+	}
+
+	/**
+	 * Scales the visible span around a point -- under 1 zooms in, over 1 zooms out.
+	 *
+	 * ⚠️ There was no way to zoom *out* before v0.8.0. There was `fit`, which throws the zoom away
+	 * entirely, and `zoomAround`, which only ever goes further in -- so a loop examined at two
+	 * seconds could only be left by starting over. `setWindow` clamps both ends, so asking for more
+	 * span than the song has is harmless and lands on the whole song.
+	 */
+	zoomBy(factor: number, time: number): void {
+		const span = (this.viewEnd - this.viewStart) * factor;
 		this.setWindow(time - span / 2, time + span / 2);
 	}
 

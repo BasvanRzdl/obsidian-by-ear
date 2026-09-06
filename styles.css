@@ -1,124 +1,378 @@
 /*
- * By Ear.
+ * By Ear — Stage.
  *
- * Everything is expressed in Obsidian's own theme variables so the player wears whatever theme the
- * vault is wearing. The six --by-ear-* variables below are read by the canvas at resize time, so a
- * theme (or a snippet) can restyle the waveform without touching this plugin.
+ * ⚠️ This player does NOT follow the Obsidian theme, and that is a decision rather than an
+ * oversight (spec §11c, 6 September 2026). Two reasons. Video on a light ground looks bad and this
+ * is a night-time tool; and more concretely, the player used to be transparent, so Bas's "Desert at
+ * Night" snippet — which paints a scene on `.app-container` — showed straight through it: volcano
+ * and cacti behind the tempo sliders. An opaque ground of its own is the fix, and it is one rule.
+ *
+ * The six --by-ear-* variables the canvas reads at resize time are kept and given Stage values, so
+ * the waveform matches the panel and the theming hook still exists for anyone who wants it.
+ *
+ * The vocabulary is deliberately tiny:
+ *   one shape       4px radius, 1px line, flat fill, no shadows on anything you press
+ *   two weights     .is-on = filled accent = ENGAGED. Everything else is an outline.
+ *   one accent      #A98BD8, the vault's Musician grape — the same colour on the calendar,
+ *                   in the graph and in villanova.css. One palette everywhere.
+ *   44px floor      every target, on every axis. `flex: 0 0 44px` sets WIDTH; height needs saying.
+ *
+ * System fonts throughout: a plugin ships only main.js and styles.css, and a rehearsal room has no
+ * wifi, so a downloaded face could never have loaded.
  */
 
 .by-ear-player {
-  --by-ear-wave: var(--text-normal);
-  --by-ear-wave-dim: var(--text-faint);
-  --by-ear-playhead: var(--color-orange);
-  --by-ear-loop: rgba(125, 165, 255, 0.14);
-  --by-ear-loop-edge: var(--color-blue);
-  --by-ear-mark: var(--color-yellow);
-  --by-ear-axis: var(--text-faint);
+  --ground: #0b0c0f;
+  --surface: #16181d;
+  --raised: #1e2128;
+  --line: #3f4550;
+  --tx: #f2f3f5;
+  --tx2: #9ba2ad;
+  --tx3: #8a919c;
+  --acc: #a98bd8;
+  --acc-ink: #0b0c0f;
+  --acc-soft: rgba(169, 139, 216, 0.2);
+  --warn: #e0a96d;
+  --pad: 14px;
+  --gap: 8px;
+  --tap: 44px;
 
+  --by-ear-wave: #b9c0cb;
+  --by-ear-wave-dim: #5c6470;
+  --by-ear-playhead: #ffffff;
+  --by-ear-loop: rgba(169, 139, 216, 0.2);
+  --by-ear-loop-edge: #a98bd8;
+  --by-ear-mark: #a98bd8;
+  --by-ear-axis: #8a919c;
+
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px 18px;
-  outline: none;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  background: var(--ground);
+  color: var(--tx);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+
+.by-ear-player [hidden] {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------------ the control shape */
+
+.by-ear-player .by-ear-b {
+  flex: 1 1 auto;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  box-shadow: none;
+  color: var(--tx);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.1;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.by-ear-player .by-ear-b:hover {
+  background: var(--raised);
+}
+
+/* The whole state vocabulary. Filled means engaged — playing, looping, the selected tab. */
+.by-ear-player .by-ear-b.is-on {
+  background: var(--acc);
+  border-color: var(--acc);
+  color: var(--acc-ink);
+  font-weight: 700;
+}
+
+.by-ear-player .by-ear-b:focus-visible,
+.by-ear-player .by-ear-tab:focus-visible,
+.by-ear-player textarea:focus-visible,
+.by-ear-player input:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+.by-ear-player .by-ear-icon {
+  flex: 0 0 var(--tap);
+  padding: 0;
+  font-size: 17px;
+}
+
+.by-ear-player .by-ear-icon .svg-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.by-ear-player .by-ear-grow {
+  flex: 2 1 auto;
 }
 
 .by-ear-row {
   display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.by-ear-lbl {
+  flex: 0 0 auto;
+  padding: 4px 1px 0;
+  color: var(--tx3);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.by-ear-readout {
+  flex: 0 0 auto;
+  padding: 2px 1px;
+  color: var(--tx2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ zone D: the top bar */
+
+.by-ear-top {
+  flex: 0 0 auto;
+  display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  min-height: var(--tap);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--ground);
 }
 
-.by-ear-library select {
+.by-ear-player .by-ear-song {
+  flex: 0 1 auto;
+  justify-content: flex-start;
+  min-width: 0;
+  max-width: 60%;
+  border-color: transparent;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.by-ear-player .by-ear-song:hover {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.by-ear-song-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.by-ear-song-caret {
+  flex: 0 0 auto;
+  color: var(--tx2);
+  font-size: 12px;
+}
+
+.by-ear-note-link {
   flex: 1 1 auto;
-  min-width: 12em;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tx3);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
-/* --- transport ----------------------------------------------------------- */
+.by-ear-note-link a {
+  color: var(--acc);
+  text-decoration: none;
+}
 
-.by-ear-transport button.by-ear-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
+.by-ear-note-link a:hover {
+  text-decoration: underline;
+}
+
+/* Desktop only: on touch, the same fact sits beside the notes box, where the doubt happens. */
+.by-ear-player.is-mobile .by-ear-note-link,
+.by-ear-player.is-mobile .by-ear-top-save {
+  display: none;
+}
+
+.by-ear-player .by-ear-top-save {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.by-ear-player.is-mobile .by-ear-song {
+  margin-right: auto;
+}
+
+/* ------------------------------------------------------------------ the two columns */
+
+.by-ear-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Narrow: content on top, controls under it. `order` rather than column-reverse, so the DOM order
+   stays the reading order for anything that walks the tree. */
+.by-ear-stage {
+  order: 0;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--pad);
+}
+
+.by-ear-rail {
+  order: 1;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+}
+
+.by-ear-player.is-wide .by-ear-body {
+  flex-direction: row;
+}
+
+.by-ear-player.is-wide .by-ear-rail {
+  order: 0;
+  flex: 0 0 288px;
+  width: 288px;
+  border-top: 0;
+  border-right: 1px solid var(--line);
+}
+
+.by-ear-player.is-wide .by-ear-stage {
+  order: 1;
+  flex: 1 1 auto;
+}
+
+/* A phone in landscape has 369 pt of height and a rail is the only thing that fits beside a
+   picture. 216 is the narrowest that still clears 44 px targets with a 3-button transport. */
+.by-ear-player.is-phone.is-wide .by-ear-rail {
+  flex: 0 0 216px;
+  width: 216px;
+  gap: 6px;
+  padding: 10px;
+}
+
+.by-ear-player.is-phone .by-ear-stage {
+  --pad: 10px;
+  gap: 8px;
+}
+
+/* ------------------------------------------------------------------ zone B: the rail */
+
+.by-ear-transport .by-ear-b {
+  min-height: 56px;
+}
+
+.by-ear-player.is-phone.is-wide .by-ear-transport .by-ear-b {
+  min-height: 48px;
+}
+
+.by-ear-player .by-ear-play {
+  flex: 1.4 1 auto;
 }
 
 .by-ear-clock {
-  font-family: var(--font-monospace);
-  font-size: var(--font-ui-small);
-  color: var(--text-muted);
-  margin-left: 8px;
+  flex: 0 0 auto;
+  padding: 2px 0;
+  color: var(--tx);
+  font-size: 17px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
-.by-ear-spacer {
-  flex: 1 1 auto;
+/* Two different cuts, because the two phone orientations are not the same room.
+   The loop-nudge pair goes on any phone: four sub-44 px targets in a 216 px rail is not a control,
+   and the A/B buttons under the waveform do the same job with room to spare.
+   The second rewind button and the clock go only in landscape, where the rail has 369 pt of height
+   to fit everything into. Portrait keeps both — it has the height and not the width. */
+.by-ear-player.is-phone .by-ear-wide-only {
+  display: none;
 }
 
-.by-ear-loops button.is-active {
-  background: var(--interactive-accent);
-  color: var(--text-on-accent);
+.by-ear-player.is-phone.is-wide .by-ear-tight-drop,
+.by-ear-player.is-phone.is-wide .by-ear-clock {
+  display: none;
 }
 
-.by-ear-loop-readout {
-  font-family: var(--font-monospace);
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
-  margin-left: 6px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* --- tempo and pitch ----------------------------------------------------- */
-
-.by-ear-controls {
-  display: flex;
-  align-items: flex-end;
-  gap: 18px;
-  flex-wrap: wrap;
-  padding-top: 4px;
-}
-
-.by-ear-knob {
+.by-ear-tempo {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 190px;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
 }
 
-.by-ear-knob-label {
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.by-ear-tempo-head {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
 }
 
-.by-ear-knob-value {
-  font-family: var(--font-monospace);
-  font-size: var(--font-ui-small);
-  color: var(--text-normal);
+.by-ear-tempo-value {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
 
-.by-ear-knob input[type="range"] {
-  width: 100%;
+.by-ear-tempo-unit {
+  color: var(--tx2);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1;
 }
 
-/* --- status and legend --------------------------------------------------- */
-
-.by-ear-status {
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
-  border-top: 1px solid var(--background-modifier-border);
-  padding-top: 8px;
+.by-ear-player .by-ear-tempo-swap {
+  flex: 0 0 auto;
+  min-height: 34px;
+  margin-left: auto;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--tx3);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
-
-/* --- steppers: a slider with a - and a + on either side --------------------- */
 
 .by-ear-stepper {
   display: flex;
@@ -126,420 +380,515 @@
   gap: 6px;
 }
 
-.by-ear-stepper .slider {
-  flex: 1 1 auto;
-  min-width: 0;
+.by-ear-player .by-ear-step {
+  flex: 0 0 var(--tap);
+  padding: 0;
+  font-size: 18px;
 }
 
-.by-ear-step {
+.by-ear-stepper input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+/* ------------------------------------------------------------------ zone C: the tabs */
+
+.by-ear-tabs-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 2px;
+}
+
+.by-ear-tabs {
   flex: 0 0 auto;
-  width: 26px;
-  padding: 0;
-  font-size: var(--font-ui-small);
-  line-height: 1;
+  display: flex;
+  border-bottom: 1px solid var(--line);
+}
+
+.by-ear-player .by-ear-tab {
+  flex: 1 1 0;
+  min-height: var(--tap);
+  margin-bottom: -1px;
+  padding: 0 2px;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--tx3);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.by-ear-player .by-ear-tab:hover {
+  background: var(--surface);
+}
+
+.by-ear-player .by-ear-tab[aria-selected="true"] {
+  border-bottom-color: var(--acc);
+  color: var(--acc);
+}
+
+/* Both spellings are in the DOM; only one is ever shown. One build, two widths — which is how the
+   phone and tablet layouts are kept from drifting apart. */
+.by-ear-tab-glyph {
+  display: none;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.by-ear-player.is-phone.is-wide .by-ear-tab-word {
+  display: none;
+}
+
+.by-ear-player.is-phone.is-wide .by-ear-tab-glyph {
+  display: inline;
+}
+
+/* ⚠️ The panel scrolls. Without this a song with a dozen marks is clipped mid-row with no
+   scrollbar and no way to reach the rest — which is exactly what the 6 September audit found. */
+.by-ear-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.by-ear-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  min-height: 100%;
+}
+
+.by-ear-empty {
+  padding: 12px 4px;
+  color: var(--tx3);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+/* --- marks --- */
+
+.by-ear-marklist {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.by-ear-mk {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+.by-ear-player .by-ear-mk-jump {
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  min-width: 0;
+  gap: 9px;
+  padding: 0 10px;
+  font-size: 14.5px;
+  font-weight: 500;
+}
+
+.by-ear-mk-flag {
+  flex: 0 0 9px;
+  width: 9px;
+  height: 9px;
+  background: var(--acc);
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+
+.by-ear-mk-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.by-ear-mk-time {
+  margin-left: auto;
+  color: var(--tx3);
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
-  cursor: pointer;
+}
+
+.by-ear-player .by-ear-mk-edit {
+  flex: 0 0 var(--tap);
+}
+
+/* --- notes --- */
+
+.by-ear-player .by-ear-findings {
+  flex: 1 1 auto;
+  min-height: 96px;
+  padding: 10px 11px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--tx);
+  font-family: inherit;
+  font-size: 14.5px;
+  line-height: 1.5;
+  resize: none;
+}
+
+.by-ear-player .by-ear-findings::placeholder {
+  color: var(--tx3);
+}
+
+.by-ear-notes-foot {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ⚠️ The receipt lives here, under the box, and not in a header. The doubt it exists to answer
+   happens while typing: Bas typed a finding, opened the chart, saw nothing below a collapsed
+   lyrics callout and reasonably concluded the write was broken. It had worked. */
+.by-ear-save-state {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tx3);
+  font-size: 12.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.by-ear-save-state.is-pending {
+  color: var(--warn);
+}
+
+.by-ear-player .by-ear-save {
+  flex: 0 0 auto;
+  padding: 0 14px;
+}
+
+/* --- tune --- */
+
+.by-ear-player .by-ear-reset .by-ear-b {
+  font-size: 14px;
+}
+
+.by-ear-keys {
+  margin-top: 6px;
+  color: var(--tx2);
+  font-size: 12.5px;
 }
 
 .by-ear-keys summary {
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
+  padding: 6px 0;
+  color: var(--tx3);
   cursor: pointer;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .by-ear-keys dl {
   display: grid;
-  grid-template-columns: 7em 1fr;
-  gap: 2px 12px;
-  margin: 8px 0 0;
-  font-size: var(--font-ui-smaller);
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  margin: 0;
 }
 
 .by-ear-keys dt {
-  font-family: var(--font-monospace);
-  color: var(--text-normal);
+  color: var(--tx);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .by-ear-keys dd {
   margin: 0;
-  color: var(--text-muted);
+  color: var(--tx3);
 }
 
-.by-ear-empty {
-  padding: 24px;
-  max-width: 34em;
-  color: var(--text-muted);
-}
-
-.by-ear-settings-status {
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
-}
-
-/* --- filter, marks and the ledger pane ------------------------------------ */
-
-.by-ear-filter {
-  flex: 0 1 16em;
-  min-width: 8em;
-}
-
-.by-ear-marks-row {
-  align-items: flex-start;
-}
-
-.by-ear-marks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  flex: 1 1 auto;
-}
-
-.by-ear-marks-empty {
-  color: var(--text-faint);
-  font-size: var(--font-ui-smaller);
-  align-self: center;
-}
-
-.by-ear-chip {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 1px 2px 1px 6px;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 12px;
-  background: var(--background-secondary);
-}
-
-.by-ear-chip-name {
-  border: none;
-  background: transparent;
-  box-shadow: none;
-  padding: 0;
-  height: auto;
-  width: 7em;
-  font-size: var(--font-ui-smaller);
-}
-
-.by-ear-chip-name:focus {
-  box-shadow: none;
-  outline: none;
-}
-
-.by-ear-chip-x {
-  border: none;
-  background: transparent;
-  box-shadow: none;
-  padding: 0 4px;
-  height: auto;
-  color: var(--text-faint);
-  cursor: pointer;
-}
-
-.by-ear-chip-x:hover {
-  color: var(--text-error);
-}
-
-.by-ear-ledger {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.by-ear-ledger-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
-}
-
-.by-ear-ledger-head .by-ear-note-link {
-  flex: 1 1 auto;
-}
-
-.by-ear-save {
-  flex: 0 0 auto;
-  padding: 2px 10px;
-  font-size: var(--font-ui-smaller);
-  cursor: pointer;
-}
-
-.by-ear-save-state {
-  flex: 0 0 auto;
-  color: var(--text-faint);
-  font-size: var(--font-ui-smaller);
-}
-
-.by-ear-save-state.is-pending {
-  color: var(--text-accent);
-}
-
-.by-ear-note-how {
-  color: var(--text-faint);
-}
-
-.by-ear-findings {
-  width: 100%;
-  min-height: 4em;
-  resize: vertical;
-  font-size: var(--font-ui-small);
-}
-
-/* ===========================================================================
- * LAYOUT
- *
- * Two shapes, one tree, and nothing positioned absolutely.
- *
- *   stage — the picture, with the waveform and its tools underneath it.
- *   panel — everything you press.
- *
- * Narrow, they stack; wide, they sit side by side and the panel becomes a left rail. That is a
- * single flex-direction flip, decided in view.ts from the player's own box (>= 720px and wider than
- * it is tall), not from the window — the player may be one pane among several.
- *
- * ⚠️ Every layout bug up to v0.6.0 came from breaking one of these rules: a picture positioned
- * behind the controls, a rail measured off the film's letterboxing, an overlay that could not
- * escape Obsidian's transforms. Nothing here is ever drawn on top of the picture, and nothing
- * measures anything.
- * =========================================================================== */
-
-.by-ear-player {
-  flex-direction: column;
-  gap: 0;
-  padding: 0;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.by-ear-stage {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  min-width: 0;
-  flex: 1 1 auto;
-  background: var(--background-secondary);
-}
-
-.by-ear-panel {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  flex: 0 0 auto;
-  border-top: 1px solid var(--background-modifier-border);
-}
-
-.by-ear-scroll {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 12px 14px calc(14px + env(safe-area-inset-bottom, 0px));
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  min-height: 0;
-}
-
-/* --- wide: the panel becomes the left rail --------------------------------- */
-
-.by-ear-player.is-wide {
-  flex-direction: row;
-}
-
-.by-ear-player.is-wide .by-ear-panel {
-  /* 320px is Apple's own sidebar width in landscape; 240 on a phone, where 320 would be a third
-     of the screen. */
-  flex: 0 0 320px;
-  order: -1; /* Left, as asked. */
-  border-top: none;
-  border-right: 1px solid var(--background-modifier-border);
-}
-
-.by-ear-player.is-wide.is-mobile:not(.is-immersive) .by-ear-panel,
-.by-ear-player.is-wide.is-phone .by-ear-panel {
-  flex-basis: 240px;
-}
-
-/* --- the picture ----------------------------------------------------------- */
+/* ------------------------------------------------------------------ zone A: the stage */
 
 .by-ear-screen {
-  display: none;
-}
-
-.by-ear-screen.has-video {
-  display: flex;
   flex: 1 1 auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   min-height: 0;
   background: #000;
+  border-radius: 4px;
   overflow: hidden;
+}
+
+/* No picture, no empty box. The waveform takes the room instead. */
+.by-ear-player:not(.has-video) .by-ear-screen {
+  display: none;
 }
 
 .by-ear-video {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: #000;
 }
 
 .by-ear-video.is-hidden {
   display: none;
 }
 
-/* --- the waveform and its own tools ---------------------------------------- */
-
-.by-ear-wave-wrap {
-  position: relative;
+.by-ear-wavebox {
   flex: 0 0 auto;
-  width: 100%;
-  height: 132px;
-  background: var(--background-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
 }
 
-.by-ear-player.is-mobile .by-ear-wave-wrap {
-  height: 112px;
+.by-ear-wave-wrap {
+  flex: 0 0 auto;
+  position: relative;
+  height: 200px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.by-ear-player.is-phone.is-wide .by-ear-wave-wrap {
+  height: 96px;
+}
+
+.by-ear-player.is-phone:not(.is-wide) .by-ear-wave-wrap {
+  height: 120px;
 }
 
 .by-ear-wave {
   display: block;
   width: 100%;
   height: 100%;
+  /* The canvas owns its own pointer handling: scrub, drag a loop edge, tap a flag. */
   touch-action: none;
 }
 
-.by-ear-strip-tools {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  display: flex;
-  gap: 6px;
+/* Audio only: the waveform grows — and then stops. Past about 360 px a taller waveform tells you
+   nothing more, and the panel below wants the room far more than the extra amplitude does. */
+.by-ear-player:not(.has-video) .by-ear-wavebox {
+  flex: 1 1 auto;
 }
 
-.by-ear-tool {
-  padding: 4px 10px;
-  min-height: 32px;
-  font-size: var(--font-ui-smaller);
-  background: color-mix(in srgb, var(--background-primary) 82%, transparent);
-  cursor: pointer;
+.by-ear-player:not(.has-video) .by-ear-wave-wrap {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 140px;
+  max-height: 360px;
 }
 
-.by-ear-player.is-mobile .by-ear-tool {
-  min-height: 44px;
-  min-width: 44px;
-  padding-inline: 14px;
-  font-size: var(--font-ui-small);
+/* The tabs travel down into the stage when there is no picture and room to spare. They always sit
+   directly above the panel they switch — the rule is the relationship, not the location. */
+.by-ear-stage > .by-ear-tabs-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 0;
 }
 
-/* --- groups inside the rail ------------------------------------------------ */
+.by-ear-stage > .by-ear-tabs-wrap .by-ear-findings {
+  font-size: 16px;
+  line-height: 1.6;
+}
 
-.by-ear-row {
+/* --- the loop row: Set A, Set B, Clear, and the zoom --- */
+
+.by-ear-edgerow {
+  flex: 0 0 auto;
+  min-height: var(--tap);
+}
+
+.by-ear-player .by-ear-edge {
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0;
+  align-items: flex-start;
+  min-width: 0;
+  padding: 0 10px;
+}
+
+.by-ear-edge-lbl {
+  color: var(--tx3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+.by-ear-edge-time {
+  color: var(--tx);
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.by-ear-loop-len {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  padding: 0 10px;
+  color: var(--tx3);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.by-ear-transport {
-  justify-content: flex-start;
+.by-ear-player .by-ear-fit {
+  flex: 0 0 auto;
+  padding: 0 12px;
+  font-size: 14px;
 }
 
-.by-ear-player.is-wide .by-ear-transport {
-  justify-content: center;
-}
-
-.by-ear-clock {
-  flex-basis: 100%;
-  font-family: var(--font-monospace);
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
-}
-
-.by-ear-player.is-wide .by-ear-clock {
-  text-align: center;
-}
-
-.by-ear-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.by-ear-knob {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-/* --- touch sizing ---------------------------------------------------------- */
-
-.by-ear-player.is-mobile button,
-.by-ear-player.is-mobile .dropdown,
-.by-ear-player.is-mobile .by-ear-filter {
-  min-height: 48px;
-  min-width: 48px;
-  font-size: var(--font-ui-medium);
-}
-
-.by-ear-player.is-mobile .by-ear-step {
-  width: 52px;
-}
-
-.by-ear-player.is-mobile .slider {
-  height: 40px;
-}
-
-.by-ear-player.is-mobile .by-ear-keys {
+/* 390 pt of width will not hold seven controls and a readout. The readout is the one that carries
+   no action, so it is the one that goes. */
+.by-ear-player.is-phone:not(.is-wide) .by-ear-loop-len {
   display: none;
 }
 
-/* --- notes: present, and as small as it can be ----------------------------- */
+/* --- the report line: zero height when there is nothing to say --- */
 
-.by-ear-findings {
-  width: 100%;
-  min-height: 2.4em;
-  height: 2.4em;
-  resize: vertical;
-  font-size: var(--font-ui-small);
+.by-ear-report {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--tx2);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
-.by-ear-findings:focus {
-  height: 7em;
+.by-ear-report.is-warn {
+  background: rgba(224, 169, 109, 0.12);
+  border-color: rgba(224, 169, 109, 0.4);
+  color: var(--warn);
 }
 
-/* --- full screen ----------------------------------------------------------- */
+/* ------------------------------------------------------------------ full screen */
 
+/*
+ * ⚠️ `position: fixed` resolves against the nearest transformed ancestor, and Obsidian transforms
+ * its panes — so the view is reparented to document.body in view.ts before this class lands. The
+ * safe-area padding is what stops the top bar sliding under a notch and the loop row under the home
+ * indicator: v0.7.0 drew to device dimensions and the controls sat beneath the system chrome.
+ */
 .by-ear-player.is-immersive {
   position: fixed;
   inset: 0;
-  z-index: var(--layer-modal, 100);
-  background: var(--background-primary);
-  padding-top: env(safe-area-inset-top, 0px);
+  z-index: 100;
+  height: 100%;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+  background: var(--ground);
 }
 
-/* The only two things not used while playing are the two that go. */
-.by-ear-player.is-immersive .by-ear-library,
-.by-ear-player.is-immersive .by-ear-status,
-.by-ear-player.is-immersive .by-ear-keys {
+/* Tap the picture for just the hands. A choice, never a timeout — this is practising, not
+   watching, and the loop and the tempo *are* the content. */
+.by-ear-player.chrome-hidden .by-ear-top,
+.by-ear-player.chrome-hidden .by-ear-rail,
+.by-ear-player.chrome-hidden .by-ear-wavebox {
   display: none;
 }
 
-.by-ear-player.is-immersive.chrome-hidden .by-ear-panel,
-.by-ear-player.is-immersive.chrome-hidden .by-ear-wave-wrap {
-  display: none;
+.by-ear-player.chrome-hidden .by-ear-stage {
+  flex: 1 1 auto;
+  padding: 0;
 }
 
-/* --- the rename modal ------------------------------------------------------ */
+/* ------------------------------------------------------------------ the library modal */
+
+.by-ear-library-modal .by-ear-lib-filter {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.by-ear-lib-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 46vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.by-ear-lib-row {
+  display: flex;
+  gap: 5px;
+}
+
+.by-ear-lib-row.is-current .by-ear-lib-pick {
+  border-color: var(--interactive-accent);
+}
+
+.by-ear-lib-pick {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  text-align: left;
+}
+
+.by-ear-lib-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.by-ear-lib-kind {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.by-ear-lib-forget {
+  flex: 0 0 44px;
+  min-height: 44px;
+}
+
+.by-ear-lib-empty {
+  padding: 16px 4px;
+  color: var(--text-muted);
+}
+
+.by-ear-lib-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.by-ear-lib-hint {
+  flex: 1 1 200px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+/* The real file input is unusable as a control and is only ever clicked in code. */
+.by-ear-file-input {
+  display: none;
+}
 
 .by-ear-rename {
   width: 100%;
-  margin-bottom: 12px;
 }
 
 .by-ear-rename-row {
   display: flex;
   gap: 8px;
-  justify-content: flex-end;
-}
-
-.by-ear-file-input {
-  display: none;
+  margin-top: 12px;
 }
