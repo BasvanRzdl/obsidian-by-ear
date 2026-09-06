@@ -76,6 +76,15 @@
   padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 52px);
 }
 
+/* ⚠️ Set by relayout() only when the player's own box actually starts at the top of the screen —
+   measured, not assumed. Obsidian's mobile header buttons float over the view rather than sitting
+   above it, so the song button and ⛶ were underneath them and barely pressable. Guessing at a
+   padding would waste 47 px everywhere it was not needed; measuring costs one rect that is already
+   being read. */
+.by-ear-player.needs-inset {
+  padding-top: max(env(safe-area-inset-top, 0px), 46px);
+}
+
 /* ------------------------------------------------------------------ the control shape */
 
 .by-ear-player .by-ear-b {
@@ -170,6 +179,8 @@
   gap: 6px;
   min-height: var(--tap);
   padding: 4px 8px;
+  position: relative;
+  z-index: 2;
   border-bottom: 1px solid var(--line);
   background: var(--ground);
 }
@@ -236,6 +247,21 @@
   margin-right: auto;
 }
 
+.by-ear-player.is-mobile .by-ear-top {
+  min-height: 52px;
+}
+
+/* The song name and the way out of full screen are the two controls with no keyboard fallback and
+   no second route, so on touch they get more than the floor. */
+.by-ear-player.is-mobile .by-ear-top .by-ear-b {
+  min-height: 48px;
+}
+
+.by-ear-player.is-mobile .by-ear-song {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
 /* ------------------------------------------------------------------ the two columns */
 
 .by-ear-body {
@@ -270,9 +296,20 @@
   min-width: 0;
   min-height: 0;
   padding: 12px;
-  overflow: hidden;
   border-top: 1px solid var(--line);
   background: var(--ground);
+  /* ⚠️ The rail scrolls, and the panel inside it does not. This reverses the design's "the rail
+     never scrolls", for a measured reason: on an iPhone the rail's fixed rows want ~388 px in the
+     ~287 px portrait leaves it, so the panel below them was being squeezed to nothing. A scroll
+     container with no height is not a scroll container — the content was simply clipped and
+     unreachable, on every surface, which is exactly what "scrolling is impossible everywhere"
+     was. One scroller per column is also better than two: nested scrolling on touch means the
+     wrong thing moves about half the time. Tier 1 sits at the top, so it is what you see at rest;
+     scrolling only happens when you reach past it for the tab content. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .by-ear-player.is-wide .by-ear-body {
@@ -411,10 +448,9 @@
 
 .by-ear-tabs-wrap {
   background: var(--ground);
-  flex: 1 1 auto;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
-  min-height: 0;
   margin-top: 2px;
 }
 
@@ -465,15 +501,12 @@
   display: inline;
 }
 
-/* ⚠️ The panel scrolls. Without this a song with a dozen marks is clipped mid-row with no
-   scrollbar and no way to reach the rest — which is exactly what the 6 September audit found. */
+/* The panel does not scroll on its own — the rail above it is the single scroller. It still needs
+   to be able to grow past the space left over, which is what `flex: 0 0 auto` buys: without it a
+   flex child is squeezed instead of overflowing, and a squeezed panel is the bug this replaced. */
 .by-ear-panel {
   background: var(--ground);
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  -webkit-overflow-scrolling: touch;
+  flex: 0 0 auto;
 }
 
 .by-ear-pane {
@@ -481,7 +514,6 @@
   flex-direction: column;
   gap: 6px;
   padding-top: 8px;
-  min-height: 100%;
 }
 
 .by-ear-empty {
@@ -543,8 +575,8 @@
 /* --- notes --- */
 
 .by-ear-player .by-ear-findings {
-  flex: 1 1 auto;
-  min-height: 96px;
+  flex: 0 0 auto;
+  min-height: 140px;
   padding: 10px 11px;
   background: var(--surface);
   border: 1px solid var(--line);

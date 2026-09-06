@@ -1193,6 +1193,14 @@ export class PlayerView extends ItemView {
 		const box = this.contentEl.getBoundingClientRect();
 		const wide = box.width >= 720 && box.width > box.height;
 		this.contentEl.toggleClass("is-wide", wide);
+		/*
+		 * ⚠️ Whether we are sitting underneath Obsidian's own floating header, measured rather than
+		 * assumed. On mobile its header buttons float *over* the view instead of above it, so the
+		 * song button and the full-screen button were underneath them and barely pressable. The
+		 * padding that fixes it would be dead space anywhere the header is not there, and there is
+		 * no reliable way to ask -- but the player's own top edge answers the question directly.
+		 */
+		this.contentEl.toggleClass("needs-inset", !this.immersive && box.top < 8);
 
 		const hasPicture = this.video?.hasPicture === true;
 		this.contentEl.toggleClass("has-video", hasPicture);
