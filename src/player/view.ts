@@ -63,6 +63,10 @@ export class PlayerView extends ItemView {
 	private awake = new KeepAwake();
 	private wasPlaying = false;
 	private filter = "";
+	private immersive = false;
+	private idleTimer = 0;
+	/** Whether *we* took native full screen, as opposed to only drawing the overlay. */
+	private native = false;
 	/** Whether the ledger holds anything not yet on disk. Drives the receipt, nothing else. */
 	private unsaved = false;
 	/** True only while restoring a note, so putting values back does not count as changing them. */
@@ -156,6 +160,25 @@ export class PlayerView extends ItemView {
 		}
 
 		this.registerDomEvent(root, "keydown", this.onKeyDown);
+		// Any sign of life brings the controls back. Predictability matters more here than tidiness:
+		// nobody should ever have to wonder how to get the transport back.
+		for (const type of ["pointermove", "pointerdown", "keydown"] as const) {
+			this.registerDomEvent(root, type, () => this.wakeChrome());
+		}
+		// Leaving full screen by Esc or a system gesture must not leave the class behind, or the
+		// player would sit in a full-screen layout inside a normal-sized pane.
+		// Guarded on whether *we* took native full screen, not on the platform: an iPad reports as
+		// mobile and does have the API, so a platform test would strand it in a full-screen layout
+		// inside a normal pane after a swipe out.
+		this.registerDomEvent(document, "fullscreenchange", () => {
+			if (!document.fullscreenElement && this.immersive && this.native) {
+				this.immersive = false;
+				this.native = false;
+				this.contentEl.removeClass("is-immersive");
+				this.wakeChrome();
+				this.dirty = true;
+			}
+		});
 		this.registerDomEvent(window, "resize", () => (this.dirty = true));
 		this.engine.onEnded = () => (this.dirty = true);
 
@@ -164,6 +187,8 @@ export class PlayerView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		if (this.idleTimer) window.clearTimeout(this.idleTimer);
+		if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
 		await this.closeLedger();
 		if (this.raf) cancelAnimationFrame(this.raf);
 		this.raf = 0;
@@ -464,6 +489,7 @@ export class PlayerView extends ItemView {
 			if (loopA !== null && loopB !== null) this.waveform?.zoomTo(loopA, loopB);
 		});
 		textButton("Fit", "Fit the whole song", () => this.waveform?.fit());
+		textButton("⛶", "Full screen (f)", () => void this.toggleImmersive());
 
 		this.el.loopReadout = loops.createDiv({ cls: "by-ear-loop-readout", text: "no loop" });
 	}
@@ -630,6 +656,7 @@ export class PlayerView extends ItemView {
 			["space", "play / pause"],
 			["← →", "nudge 1 s  (shift: 5 s)"],
 			["⌘/ctrl S", "save the ledger to the note"],
+			["F / esc", "full screen, and back"],
 			["M", "drop a mark here"],
 			["S", "loop this section (mark to mark)"],
 			["A / B", "set loop start / end at the playhead"],
@@ -776,6 +803,75 @@ export class PlayerView extends ItemView {
 		if (this.el.semitones) this.el.semitones.value = String(whole);
 		if (this.el.cents) this.el.cents.value = String(Math.round((next - whole) * 100));
 		this.syncKnobUi();
+	}
+
+	// ------------------------------------------------------------------ full screen
+
+	/**
+	 * Immersive mode: the picture takes the room, the apparatus gets out of the way.
+	 *
+	 * ⚠️ Two mechanisms, because the platforms genuinely differ and only one of them is available
+	 * everywhere. **The CSS overlay is the real one** -- `position: fixed` over everything, which
+	 * works on all three devices because Obsidian's own interface is just HTML in the same document.
+	 * The **native Fullscreen API is an enhancement** layered on top where it exists: macOS and
+	 * iPadOS have it, and on the iPhone `Element.requestFullscreen` is unavailable (Safari 17.2 put
+	 * it behind a flag, which a WKWebView does not get). Building on the API alone would have meant
+	 * no full screen on the phone at all.
+	 *
+	 * ⚠️ And the obvious iPhone route is a trap. `video.webkitEnterFullscreen()` does work there,
+	 * but it hands the picture to the **native iOS player** -- which brings its own scrubber and its
+	 * own play button. Scrub that and the video moves while the engine does not: the picture would
+	 * be somewhere the music is not, silently, which is the one failure this whole design is built
+	 * to prevent. So it is never called, on any platform.
+	 *
+	 * The controls that stay are the ones this tool is *for* -- transport, loop, marks, tempo and
+	 * pitch. A full-screen video with no way to loop a bar would be a worse tool than the small one.
+	 */
+	private async toggleImmersive(): Promise<void> {
+		this.immersive = !this.immersive;
+		this.contentEl.toggleClass("is-immersive", this.immersive);
+		this.wakeChrome();
+
+		const el = this.contentEl as HTMLElement & { requestFullscreen?: () => Promise<void> };
+		try {
+			if (this.immersive) {
+				if (document.fullscreenEnabled && el.requestFullscreen) {
+					await el.requestFullscreen();
+					this.native = true;
+				}
+			} else if (document.fullscreenElement) {
+				await document.exitFullscreen();
+				this.native = false;
+			}
+		} catch {
+			// Refused or unsupported: the overlay alone is still a full-screen picture. On the phone
+			// this is the expected path, not an error.
+		}
+		// The canvas is sized from its box, and its box just changed.
+		this.dirty = true;
+	}
+
+	/**
+	 * Shows the controls and starts the clock on hiding them again.
+	 *
+	 * Only auto-hides while immersive *and* playing: a paused player is one being read, and controls
+	 * that vanish while you are looking at them are worse than controls that never move. The touch
+	 * delay is longer because there is no `mousemove` to prove someone is still there -- a finger
+	 * that has left the glass is indistinguishable from one about to come back.
+	 */
+	private wakeChrome(): void {
+		if (this.idleTimer) window.clearTimeout(this.idleTimer);
+		this.idleTimer = 0;
+		this.contentEl.removeClass("chrome-hidden");
+		if (!this.immersive) return;
+		this.idleTimer = window.setTimeout(
+			() => {
+				if (this.immersive && this.engine.transport.playing) {
+					this.contentEl.addClass("chrome-hidden");
+				}
+			},
+			Platform.isMobile ? 4000 : 2500
+		);
 	}
 
 	// ------------------------------------------------------------------ marks
@@ -1025,6 +1121,14 @@ export class PlayerView extends ItemView {
 				break;
 			case "ArrowDown":
 				this.adjustRate(-RATE_STEP);
+				break;
+			case "f":
+			case "F":
+				void this.toggleImmersive();
+				break;
+			case "Escape":
+				if (this.immersive) void this.toggleImmersive();
+				else handled = false;
 				break;
 			case "m":
 			case "M":

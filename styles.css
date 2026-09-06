@@ -483,3 +483,94 @@ canvas.by-ear-wave {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
 }
+
+/* --- immersive mode --------------------------------------------------------
+ *
+ * A fixed overlay rather than only the Fullscreen API, because the API is not available on iPhone
+ * and this has to behave the same on all three devices. Obsidian's interface is HTML in the same
+ * document, so covering it is enough to be full screen in every way that matters here; where the
+ * real API exists (macOS, iPadOS) it is layered on top and removes the window chrome too.
+ *
+ * What stays visible is chosen, not inherited: transport, loop, marks, tempo and pitch. A
+ * full-screen video with no way to loop a bar would be a worse tool than the small one.
+ */
+
+.by-ear-player.is-immersive {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-modal, 100);
+  background: var(--background-primary);
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
+  gap: 0;
+  overflow: hidden;
+}
+
+/* Everything that is apparatus rather than instrument. */
+.by-ear-player.is-immersive .by-ear-library,
+.by-ear-player.is-immersive .by-ear-ledger,
+.by-ear-player.is-immersive .by-ear-status,
+.by-ear-player.is-immersive .by-ear-keys {
+  display: none;
+}
+
+.by-ear-player.is-immersive .by-ear-scroll {
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+
+/* The picture takes whatever the controls do not. */
+.by-ear-player.is-immersive .by-ear-screen.has-video {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 0;
+  display: flex;
+}
+
+.by-ear-player.is-immersive .by-ear-video {
+  max-height: none;
+  height: 100%;
+  aspect-ratio: auto;
+}
+
+/* Kept, and kept small: this is how a loop gets set, so losing it would defeat the mode. */
+.by-ear-player.is-immersive .by-ear-wave-wrap {
+  flex: 0 0 auto;
+  min-height: 0;
+  height: 84px;
+}
+
+.by-ear-player.is-immersive .by-ear-row,
+.by-ear-player.is-immersive .by-ear-controls {
+  padding-inline: 12px;
+}
+
+.by-ear-player.is-immersive .by-ear-transport {
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+}
+
+/* --- auto-hide ---
+ *
+ * Fades rather than removes, so nothing reflows and the picture does not jump. Pointer events go
+ * with it, so a tap anywhere lands on the player and brings everything back — the one rule is that
+ * nobody should have to work out how to return.
+ */
+
+.by-ear-player.is-immersive.chrome-hidden .by-ear-wave-wrap,
+.by-ear-player.is-immersive.chrome-hidden .by-ear-row,
+.by-ear-player.is-immersive.chrome-hidden .by-ear-controls,
+.by-ear-player.is-immersive.chrome-hidden .by-ear-marks-row {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.by-ear-player.is-immersive .by-ear-wave-wrap,
+.by-ear-player.is-immersive .by-ear-row,
+.by-ear-player.is-immersive .by-ear-controls,
+.by-ear-player.is-immersive .by-ear-marks-row {
+  transition: opacity 220ms ease;
+}
+
+.by-ear-player.is-immersive.chrome-hidden {
+  cursor: none;
+}
