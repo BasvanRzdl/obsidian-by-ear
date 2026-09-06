@@ -1,9 +1,10 @@
-import { ItemView, Modal, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
 import type ByEarPlugin from "../main";
 import { Engine } from "./engine";
 import { Waveform } from "./waveform";
 import { VideoScreen } from "./video";
 import { LibraryModal } from "./library";
+import { TimeModal } from "./time";
 import { MediaEntry, listMedia, mimeFor, readMedia } from "../media";
 import {
 	KeepAwake,
@@ -667,10 +668,10 @@ export class PlayerView extends ItemView {
 		// The picture sits in its own box above the waveform rather than behind it: a waveform drawn
 		// over hands is unreadable, and hands behind a waveform are worse.
 		const screen = root.createDiv({ cls: "by-ear-screen" });
-		this.video = new VideoScreen(screen);
-		// Tap the picture to hide the apparatus and get back to just the hands. The listener is on
-		// the box rather than the video so it still works where the video failed to load.
-		screen.addEventListener("click", () => this.toggleChrome());
+		// Tap the picture to hide the apparatus and get back to just the hands. The tap is reported
+		// by VideoScreen rather than listened for here, because the picture also takes pinch and
+		// drag now — and a pinch that ended in a click used to hide the controls as a side effect.
+		this.video = new VideoScreen(screen, () => this.toggleChrome());
 
 		const box = root.createDiv({ cls: "by-ear-wavebox" });
 		const wrap = box.createDiv({ cls: "by-ear-wave-wrap" });
@@ -731,6 +732,9 @@ export class PlayerView extends ItemView {
 				"by-ear-edge"
 			);
 			b.createSpan({ cls: "by-ear-edge-lbl", text: which.toUpperCase() });
+			// Tap sets the edge here; hold types a number. The same 550 ms gesture as a mark flag,
+			// so there is one "I mean this deliberately" everywhere in the player.
+			this.holdToEdit(b, () => this.promptLoopEdge(which));
 			return b.createSpan({ cls: "by-ear-edge-time", text: "—" });
 		};
 		this.el.edgeA = edge("a");
@@ -749,6 +753,56 @@ export class PlayerView extends ItemView {
 	}
 
 	/**
+	 * Hold for half a second to type instead of aim.
+	 *
+	 * ⚠️ The capture-phase click handler is the part that matters. Without it the hold fires, the
+	 * dialogue opens, and then the ordinary click *also* runs and moves the edge to the playhead --
+	 * so the number typed would be overwritten by the gesture that opened the box to type it.
+	 */
+	private holdToEdit(button: HTMLButtonElement, onHold: () => void): void {
+		let timer = 0;
+		let held = false;
+		button.addEventListener("pointerdown", () => {
+			held = false;
+			timer = window.setTimeout(() => {
+				held = true;
+				onHold();
+			}, 550);
+		});
+		for (const type of ["pointerup", "pointercancel", "pointerleave"] as const) {
+			button.addEventListener(type, () => window.clearTimeout(timer));
+		}
+		button.addEventListener(
+			"click",
+			(event) => {
+				if (!held) return;
+				held = false;
+				event.stopImmediatePropagation();
+				event.preventDefault();
+			},
+			true
+		);
+	}
+
+	private promptLoopEdge(which: "a" | "b"): void {
+		const { loopA, loopB } = this.engine.transport;
+		const current = (which === "a" ? loopA : loopB) ?? this.engine.position();
+		new TimeModal(this.app, {
+			title: which === "a" ? "Loop start" : "Loop end",
+			value: current,
+			max: this.duration,
+			onSet: (seconds) => {
+				const other = which === "a" ? loopB : loopA;
+				if (which === "a") this.engine.setLoop(seconds, other ?? Math.min(this.duration, seconds + 2));
+				else this.engine.setLoop(other ?? Math.max(0, seconds - 2), seconds);
+				if (this.engine.hasLoop()) this.engine.setLooping(true);
+				this.syncLoopUi();
+				this.dirty = true;
+			},
+		}).open();
+	}
+
+	/**
 	 * One line that exists only when there is something to say.
 	 *
 	 * ⚠️ Restored after the 6 September audit found the design had deleted the status line
@@ -764,46 +818,47 @@ export class PlayerView extends ItemView {
 	}
 
 	/**
-	 * Rename or delete one mark.
+	 * Rename, re-time or delete one mark.
 	 *
 	 * A modal rather than an inline field: a flag is a few pixels of canvas, and editing text on a
 	 * canvas means faking a caret. Held for half a second, this is the deliberate gesture -- tapping
 	 * has already been spent on the thing you do ninety-nine times out of a hundred, which is jump
 	 * to the mark.
+	 *
+	 * The time field is new in v0.8.1. Dragging a flag is right when the ear is deciding where a
+	 * section starts; typing is right when you already know the number, and until now there was no
+	 * way to correct a mark that landed a beat late except to delete it and drop another.
 	 */
 	private renameMark(index: number): void {
 		const mark = this.ledger.marks[index];
 		if (!mark) return;
-		const modal = new Modal(this.app);
-		modal.titleEl.setText(`Mark at ${formatTime(mark.time)}`);
-		const input = modal.contentEl.createEl("input", {
-			type: "text",
-			cls: "by-ear-rename",
-			attr: { value: mark.name, placeholder: "name this mark", "aria-label": "Mark name" },
-		});
-		const commit = () => {
-			this.ledger.marks[index].name = input.value.trim();
-			this.renderMarks();
-			this.queueSave();
-			modal.close();
-		};
-		input.addEventListener("keydown", (event) => {
-			if (event.key === "Enter") commit();
-		});
-
-		const row = modal.contentEl.createDiv({ cls: "by-ear-rename-row" });
-		const save = row.createEl("button", { text: "Save", cls: "mod-cta" });
-		save.addEventListener("click", commit);
-		const remove = row.createEl("button", { text: "Delete", cls: "mod-warning" });
-		remove.addEventListener("click", () => {
-			this.ledger.marks.splice(index, 1);
-			this.renderMarks();
-			this.queueSave();
-			modal.close();
-		});
-
-		modal.open();
-		window.setTimeout(() => input.focus(), 0);
+		new TimeModal(this.app, {
+			title: "Mark",
+			value: mark.time,
+			max: this.duration,
+			name: {
+				value: mark.name,
+				onSet: (name) => {
+					const target = this.ledger.marks[index];
+					if (target) target.name = name;
+				},
+			},
+			onSet: (seconds) => {
+				const target = this.ledger.marks[index];
+				if (!target) return;
+				target.time = seconds;
+				// Re-timing can reorder them, and every consumer -- loopSection, jumpMark, the
+				// flags -- assumes the list is sorted.
+				this.ledger.marks.sort((a, b) => a.time - b.time);
+				this.renderMarks();
+				this.queueSave();
+			},
+			onDelete: () => {
+				this.ledger.marks.splice(index, 1);
+				this.renderMarks();
+				this.queueSave();
+			},
+		}).open();
 	}
 
 	// ------------------------------------------------------------------ actions

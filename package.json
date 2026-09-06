@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-by-ear",
-	"version": "0.8.0",
+	"version": "0.8.1",
 	"description": "An Obsidian plugin for learning songs by ear.",
 	"main": "main.js",
 	"scripts": {

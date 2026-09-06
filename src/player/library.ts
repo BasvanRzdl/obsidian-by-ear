@@ -37,8 +37,11 @@ export class LibraryModal extends Modal {
 	}
 
 	onOpen(): void {
-		const { contentEl, modalEl } = this;
+		const { contentEl, modalEl, containerEl } = this;
 		modalEl.addClass("by-ear-library-modal");
+		// The player takes z-index 200 in full screen, so its own picker has to clear that or it
+		// opens behind the thing that asked for it.
+		containerEl.addClass("by-ear-modal-container");
 		contentEl.empty();
 		this.titleEl.setText("Songs on this device");
 

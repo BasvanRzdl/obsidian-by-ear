@@ -52,7 +52,12 @@
   height: 100%;
   padding: 0;
   overflow: hidden;
-  background: var(--ground);
+  /* ⚠️ !important, and not casually. This element IS Obsidian's own `.view-content`, and the vault's
+     "Desert at Night" snippet paints a scene on `.app-container` and clears the containers above it
+     — so on 6 September the player rendered with a volcano and cacti behind the tab strip. Every
+     zone below repeats the background for the same reason: one transparent child is enough to let
+     the scene back in. */
+  background: var(--ground) !important;
   color: var(--tx);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   font-size: 15px;
@@ -62,6 +67,13 @@
 
 .by-ear-player [hidden] {
   display: none !important;
+}
+
+/* ⚠️ Obsidian's mobile navigation bar floats over the view rather than shortening it, so the last
+   row of the rail was sitting underneath the tab switcher. Only outside full screen: in full screen
+   the player is above the navbar and owns the whole display. */
+.by-ear-player.is-mobile:not(.is-immersive) {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 52px);
 }
 
 /* ------------------------------------------------------------------ the control shape */
@@ -227,6 +239,7 @@
 /* ------------------------------------------------------------------ the two columns */
 
 .by-ear-body {
+  background: var(--ground);
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
@@ -245,6 +258,7 @@
   min-width: 0;
   min-height: 0;
   padding: var(--pad);
+  background: var(--ground);
 }
 
 .by-ear-rail {
@@ -258,6 +272,7 @@
   padding: 12px;
   overflow: hidden;
   border-top: 1px solid var(--line);
+  background: var(--ground);
 }
 
 .by-ear-player.is-wide .by-ear-body {
@@ -395,6 +410,7 @@
 /* ------------------------------------------------------------------ zone C: the tabs */
 
 .by-ear-tabs-wrap {
+  background: var(--ground);
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
@@ -452,6 +468,7 @@
 /* ⚠️ The panel scrolls. Without this a song with a dozen marks is clipped mid-row with no
    scrollbar and no way to reach the rest — which is exactly what the 6 September audit found. */
 .by-ear-panel {
+  background: var(--ground);
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -690,6 +707,7 @@
 /* The tabs travel down into the stage when there is no picture and room to spare. They always sit
    directly above the panel they switch — the rule is the relationship, not the location. */
 .by-ear-stage > .by-ear-tabs-wrap {
+  background: var(--ground);
   flex: 1 1 auto;
   min-height: 0;
   margin-top: 0;
@@ -784,10 +802,15 @@
 .by-ear-player.is-immersive {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  /* Above Obsidian's own chrome (its modal layer is 100), because "full screen" that a floating tab
+     bar draws on top of is not full screen. The library modal is lifted past this in turn. */
+  z-index: 200;
   height: 100%;
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
-    env(safe-area-inset-left);
+  /* ⚠️ `max()`, because env() resolves to 0 unless the host page asked for viewport-fit=cover — and
+     when it did, the top bar rendered underneath the iPhone's clock. A floor costs nothing where the
+     inset is real and saves the layout where it is not. */
+  padding: max(env(safe-area-inset-top, 0px), 14px) max(env(safe-area-inset-right, 0px), 0px)
+    max(env(safe-area-inset-bottom, 0px), 8px) max(env(safe-area-inset-left, 0px), 0px);
   background: var(--ground);
 }
 
@@ -805,6 +828,12 @@
 }
 
 /* ------------------------------------------------------------------ the library modal */
+
+/* ⚠️ Above the immersive overlay. Without this the picker opened *behind* a full-screen player —
+   the keyboard came up, and the list it belonged to was a ghost under the transport. */
+.by-ear-modal-container {
+  z-index: 300;
+}
 
 .by-ear-library-modal .by-ear-lib-filter {
   width: 100%;
@@ -891,4 +920,36 @@
   display: flex;
   gap: 8px;
   margin-top: 12px;
+}
+
+/* The picture takes pinch, drag and double-tap, so the browser must not also try to scroll or
+   zoom the page underneath it. `is-zoomed` is set by VideoScreen while the transform is live. */
+.by-ear-screen {
+  touch-action: none;
+}
+
+.by-ear-screen.is-zoomed {
+  cursor: grab;
+}
+
+.by-ear-video {
+  transform-origin: center center;
+  will-change: transform;
+}
+
+/* The typed-time dialogue. */
+.by-ear-field {
+  width: 100%;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.by-ear-field-hint {
+  margin-bottom: 8px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+.by-ear-field-hint.is-bad {
+  color: var(--text-error);
 }

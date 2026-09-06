@@ -36,12 +36,27 @@ export function needsSeek(drift: number, playing: boolean): boolean {
 	return Math.abs(drift) > (playing ? DRIFT_TOLERANCE : SEEK_DEADBAND);
 }
 
+/** Past this, a two-finger move is a pinch rather than an unsteady tap. */
+const PINCH_SLOP_PX = 8;
+/** Far enough in to see a fretting hand; further and the encode has nothing left to show. */
+const MAX_SCALE = 6;
+
 export class VideoScreen {
 	private el: HTMLVideoElement;
 	private url: string | null = null;
 	private ready = false;
 
-	constructor(private host: HTMLElement) {
+	/* --- the zoom: live pointers, and where the picture has been dragged to --- */
+	private pointers = new Map<number, { x: number; y: number }>();
+	private scale = 1;
+	private tx = 0;
+	private ty = 0;
+	/** The pinch's starting geometry, so the gesture is measured against where it began. */
+	private origin: { dist: number; scale: number; cx: number; cy: number; tx: number; ty: number } | null = null;
+	private moved = false;
+	private lastTap = 0;
+
+	constructor(private host: HTMLElement, private onTap: () => void = () => undefined) {
 		this.el = host.createEl("video", { cls: "by-ear-video" });
 		this.el.muted = true; // The sound comes from the worklet. Always.
 		this.el.playsInline = true;
@@ -51,6 +66,115 @@ export class VideoScreen {
 		// second opinion about the audio session is the last thing this needs.
 		this.el.volume = 0;
 		this.hide();
+		this.installZoom();
+	}
+
+	/*
+	 * Pinch to zoom into the hands, drag to move around, double-tap to come back.
+	 *
+	 * ⚠️ Purely visual: this is a CSS transform on the video element and it never touches
+	 * `currentTime`, the engine, or the audio. Zooming is looking closer, not playing differently.
+	 *
+	 * ⚠️ And it has to own the tap. The picture already had a click handler -- tap to hide the
+	 * apparatus and see only the hands -- and a pinch ends in a click too, so zooming in used to
+	 * mean the controls vanished as a side effect. So the gesture is decided here and the tap is
+	 * reported, rather than both listeners firing and hoping.
+	 */
+	private installZoom(): void {
+		const host = this.host;
+		host.addEventListener("pointerdown", (event) => {
+			host.setPointerCapture(event.pointerId);
+			this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+			if (this.pointers.size === 2) {
+				const [a, b] = [...this.pointers.values()];
+				this.origin = {
+					dist: Math.hypot(a.x - b.x, a.y - b.y),
+					scale: this.scale,
+					cx: (a.x + b.x) / 2,
+					cy: (a.y + b.y) / 2,
+					tx: this.tx,
+					ty: this.ty,
+				};
+				this.moved = true;
+			}
+		});
+
+		host.addEventListener("pointermove", (event) => {
+			const held = this.pointers.get(event.pointerId);
+			if (!held) return;
+			const previous = { ...held };
+			held.x = event.clientX;
+			held.y = event.clientY;
+
+			if (this.pointers.size >= 2 && this.origin) {
+				const [a, b] = [...this.pointers.values()];
+				const dist = Math.hypot(a.x - b.x, a.y - b.y);
+				if (Math.abs(dist - this.origin.dist) < PINCH_SLOP_PX && this.scale === this.origin.scale) return;
+				const next = clamp(this.origin.scale * (dist / Math.max(1, this.origin.dist)), 1, MAX_SCALE);
+				// Follow the fingers: the midpoint carries the picture with it while it scales.
+				const cx = (a.x + b.x) / 2;
+				const cy = (a.y + b.y) / 2;
+				this.scale = next;
+				this.tx = this.origin.tx + (cx - this.origin.cx);
+				this.ty = this.origin.ty + (cy - this.origin.cy);
+				this.apply();
+				event.preventDefault();
+				return;
+			}
+
+			// One finger pans, but only once there is something to pan around.
+			if (this.pointers.size === 1 && this.scale > 1) {
+				this.tx += event.clientX - previous.x;
+				this.ty += event.clientY - previous.y;
+				this.moved = true;
+				this.apply();
+				event.preventDefault();
+			}
+		});
+
+		const end = (event: PointerEvent) => {
+			this.pointers.delete(event.pointerId);
+			if (this.pointers.size < 2) this.origin = null;
+			if (this.pointers.size > 0) return;
+
+			if (this.moved) {
+				this.moved = false;
+				return;
+			}
+			// A double-tap on the picture puts it back, which is the only way out of a zoom that
+			// does not require finding a control.
+			const now = performance.now();
+			if (now - this.lastTap < 300) {
+				this.lastTap = 0;
+				this.reset();
+				return;
+			}
+			this.lastTap = now;
+			this.onTap();
+		};
+		for (const type of ["pointerup", "pointercancel"] as const) {
+			host.addEventListener(type, end);
+		}
+	}
+
+	private apply(): void {
+		// Clamped so the picture can never be dragged entirely off its own box.
+		const box = this.host.getBoundingClientRect();
+		const slackX = (box.width * (this.scale - 1)) / 2;
+		const slackY = (box.height * (this.scale - 1)) / 2;
+		this.tx = clamp(this.tx, -slackX, slackX);
+		this.ty = clamp(this.ty, -slackY, slackY);
+		this.el.style.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.scale})`;
+		this.host.toggleClass("is-zoomed", this.scale > 1.001);
+	}
+
+	/** Back to the whole frame. Called by a double-tap, and whenever a new song loads. */
+	reset(): void {
+		this.scale = 1;
+		this.tx = 0;
+		this.ty = 0;
+		this.el.style.transform = "";
+		this.host.removeClass("is-zoomed");
 	}
 
 	get element(): HTMLVideoElement {
@@ -66,6 +190,7 @@ export class VideoScreen {
 	 */
 	async load(blob: Blob): Promise<LoadResult> {
 		this.unload();
+		this.reset();
 		this.url = URL.createObjectURL(blob);
 		/*
 		 * ⚠️ The URL goes on a `<source>` element, not on `src`.
@@ -178,6 +303,10 @@ export class VideoScreen {
 		this.unload();
 		this.el.remove();
 	}
+}
+
+function clamp(value: number, low: number, high: number): number {
+	return Math.min(high, Math.max(low, value));
 }
 
 export type LoadResult = { ok: true } | { ok: false; why: string; blob: Blob };
