@@ -708,9 +708,20 @@ export class PlayerView extends ItemView {
 			// A file whose audio decoded but whose picture will not show should still play -- but it
 			// must SAY so. A blank box where a video should be is exactly the silent failure this
 			// project keeps relearning: v0.4.0 showed one on iOS for two days and reported nothing.
-			let pictureFailed = false;
-			if (entry.video) pictureFailed = !(await this.video?.load(blob));
-			else this.video?.unload();
+			let pictureNote = "";
+			if (entry.video) {
+				const result = await this.video?.load(blob);
+				if (result && !result.ok) {
+					// Says what went wrong and what it was handed, because the next move depends on
+					// which of those it is -- and a status line that only says "failed" is how the
+					// last fix came to be a guess.
+					pictureNote =
+						` · ⚠️ sound only — ${result.why}` +
+						` [${result.blob.type || "no type"}, ${(result.blob.size / 1e6).toFixed(1)} MB]`;
+				}
+			} else {
+				this.video?.unload();
+			}
 			this.resetKnobs();
 			this.syncLoopUi();
 			this.dirty = true;
@@ -723,7 +734,7 @@ export class PlayerView extends ItemView {
 			this.setStatus(
 				`${stripExtension(entry.name)} · ${formatTime(song.duration)} · ` +
 					`${song.sampleRate} Hz · decoded in ${Math.round(performance.now() - started)} ms` +
-					(pictureFailed ? " · ⚠️ sound only — this device would not show the picture" : "")
+					pictureNote
 			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);

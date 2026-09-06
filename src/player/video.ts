@@ -64,10 +64,20 @@ export class VideoScreen {
 	 * copied, and the browser is free to keep it on disk rather than in memory -- which matters on a
 	 * phone holding a decoded song in the worklet at the same time.
 	 */
-	async load(blob: Blob): Promise<boolean> {
+	async load(blob: Blob): Promise<LoadResult> {
 		this.unload();
 		this.url = URL.createObjectURL(blob);
-		this.el.src = this.url;
+		/*
+		 * ⚠️ The URL goes on a `<source>` element, not on `src`.
+		 *
+		 * Two reasons, both WebKit. It is the documented workaround for blob URLs that stopped
+		 * loading in video elements from iOS 17.4.1, and it is the only place a `type` can be
+		 * *declared* rather than inferred -- a blob URL has no file name, so `src` leaves WebKit
+		 * guessing from a Blob type it may not consult.
+		 */
+		const source = this.el.createEl("source");
+		source.src = this.url;
+		if (blob.type) source.type = blob.type;
 		this.host.addClass("has-video");
 		this.el.removeClass("is-hidden");
 
@@ -80,30 +90,46 @@ export class VideoScreen {
 		 * and the player sitting on "Reading…" for ever. The sound is what matters; the picture is
 		 * allowed to fail, and is not allowed to hang.
 		 */
-		const shown = await new Promise<boolean>((resolve) => {
-			const settle = (ok: boolean) => {
+		this.el.load(); // A <source> added after the fact is only picked up on an explicit load().
+
+		/*
+		 * ⚠️ Reports *why*, not just whether.
+		 *
+		 * v0.5.1 said "sound only" and nothing else, which was enough to know it had failed and
+		 * useless for knowing what to change -- so the next fix was another guess. The four
+		 * MediaError codes distinguish the possibilities that need different answers: a rejected
+		 * source (4) is a type or container problem, a network error (2) points at the blob URL
+		 * itself and WebKit's range-request handling, a decode error (3) is a codec, and a timeout
+		 * means it stalled without ever deciding.
+		 */
+		const outcome = await new Promise<LoadResult>((resolve) => {
+			const settle = (result: LoadResult) => {
 				window.clearTimeout(timer);
 				this.el.removeEventListener("loadeddata", onData);
 				this.el.removeEventListener("error", onError);
-				resolve(ok);
+				resolve(result);
 			};
-			const onData = () => settle(true);
-			const onError = () => settle(false);
-			const timer = window.setTimeout(() => settle(false), 10000);
+			const onData = () => settle({ ok: true });
+			const onError = () => settle({ ok: false, why: describe(this.el.error), blob });
+			const timer = window.setTimeout(
+				() => settle({ ok: false, why: "timed out with no error reported", blob }),
+				10000
+			);
 			this.el.addEventListener("loadeddata", onData);
 			this.el.addEventListener("error", onError);
 		});
 
-		if (!shown) {
+		if (!outcome.ok) {
 			this.unload();
-			return false;
+			return outcome;
 		}
 		this.ready = true;
-		return true;
+		return outcome;
 	}
 
 	unload(): void {
 		this.ready = false;
+		this.el.querySelectorAll("source").forEach((s) => s.remove());
 		this.el.removeAttribute("src");
 		this.el.load();
 		if (this.url) URL.revokeObjectURL(this.url);
@@ -151,5 +177,24 @@ export class VideoScreen {
 	destroy(): void {
 		this.unload();
 		this.el.remove();
+	}
+}
+
+export type LoadResult = { ok: true } | { ok: false; why: string; blob: Blob };
+
+/** Turns a MediaError into something that names the next thing to try. */
+function describe(error: MediaError | null): string {
+	if (!error) return "failed with no error attached";
+	switch (error.code) {
+		case 1:
+			return "aborted";
+		case 2:
+			return "network error reading the blob (WebKit range-request handling)";
+		case 3:
+			return "decode error — the container opened but the video track would not decode";
+		case 4:
+			return "source not supported — wrong or missing type, or a codec WebKit will not take";
+		default:
+			return `error code ${error.code}`;
 	}
 }
