@@ -519,18 +519,59 @@ canvas.by-ear-wave {
   gap: 0;
 }
 
-/* The picture takes whatever the controls do not. */
+/* --- the picture takes everything, and the controls float on top ---
+ *
+ * ⚠️ Stacking them in a column was fine on an iPad and wrong on a phone. A 16:9 picture in a
+ * portrait phone is a wide strip whatever you do, so every row above and below it was eating the
+ * little height there was: the video ended up genuinely tiny. Overlaid, the picture gets the whole
+ * screen and the controls sit on its edges — which is what full-screen video players do, and why.
+ *
+ * (Portrait is still portrait. A 16:9 frame fills an iPhone properly only in landscape; this makes
+ * the box as large as the screen allows, it cannot change the shape of the film.)
+ */
+
 .by-ear-player.is-immersive .by-ear-screen.has-video {
-  flex: 1 1 auto;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
   border-radius: 0;
   display: flex;
 }
 
 .by-ear-player.is-immersive .by-ear-video {
   max-height: none;
+  width: 100%;
   height: 100%;
   aspect-ratio: auto;
+  object-fit: contain;
+}
+
+/* Everything else stacks against the bottom edge, above the picture. */
+.by-ear-player.is-immersive .by-ear-scroll {
+  justify-content: flex-end;
+}
+
+.by-ear-player.is-immersive .by-ear-row,
+.by-ear-player.is-immersive .by-ear-controls,
+.by-ear-player.is-immersive .by-ear-wave-wrap,
+.by-ear-player.is-immersive .by-ear-transport {
+  position: relative;
+  z-index: 1;
+}
+
+/* Each strip carries its own ground so it stays readable over any frame of any film. */
+.by-ear-player.is-immersive .by-ear-row,
+.by-ear-player.is-immersive .by-ear-controls,
+.by-ear-player.is-immersive .by-ear-wave-wrap {
+  background: color-mix(in srgb, var(--background-primary) 78%, transparent);
+  backdrop-filter: blur(8px);
+  padding-block: 6px;
+}
+
+.by-ear-player.is-immersive .by-ear-transport {
+  background: color-mix(in srgb, var(--background-primary) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-top: none;
 }
 
 /* Kept, and kept small: this is how a loop gets set, so losing it would defeat the mode. */
@@ -540,9 +581,8 @@ canvas.by-ear-wave {
   height: 84px;
 }
 
-.by-ear-player.is-immersive .by-ear-row,
-.by-ear-player.is-immersive .by-ear-controls {
-  padding-inline: 12px;
+.by-ear-player.is-immersive.is-mobile .by-ear-wave-wrap {
+  height: 68px;
 }
 
 .by-ear-player.is-immersive .by-ear-transport {

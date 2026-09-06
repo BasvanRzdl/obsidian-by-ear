@@ -159,9 +159,17 @@ export class Waveform {
 	}
 
 	zoomTo(a: number, b: number): void {
-		if (b - a < MIN_WINDOW_SECONDS) return;
-		const pad = (b - a) * 0.1;
+		// ⚠️ No early return on a short span. It used to bail below the minimum window, which meant
+		// zooming to a tight loop did nothing at all and said nothing about why. `setWindow` already
+		// clamps, so the honest behaviour is to zoom as far as allowed and stop there.
+		const pad = Math.max((b - a) * 0.1, 0.01);
 		this.setWindow(a - pad, b + pad);
+	}
+
+	/** Halves the visible span around a point. What "Zoom" means when there is no loop to zoom to. */
+	zoomAround(time: number): void {
+		const span = (this.viewEnd - this.viewStart) / 2;
+		this.setWindow(time - span / 2, time + span / 2);
 	}
 
 	draw(): void {

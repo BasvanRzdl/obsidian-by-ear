@@ -486,9 +486,13 @@ export class PlayerView extends ItemView {
 			this.engine.setLoop(null, null);
 			this.syncLoopUi();
 		});
-		textButton("Zoom", "Zoom the waveform to the loop", () => {
+		textButton("Zoom", "Zoom to the loop, or in around the playhead", () => {
+			// It used to do nothing at all unless a loop existed -- a button labelled "Zoom" that
+			// silently ignores you most of the time. With no loop, zoom around the playhead, which
+			// is what the label promises and what the hand reaching for it wants.
 			const { loopA, loopB } = this.engine.transport;
 			if (loopA !== null && loopB !== null) this.waveform?.zoomTo(loopA, loopB);
+			else this.waveform?.zoomAround(this.engine.position());
 		});
 		textButton("Fit", "Fit the whole song", () => this.waveform?.fit());
 		textButton("⛶", "Full screen (f)", () => void this.toggleImmersive());
