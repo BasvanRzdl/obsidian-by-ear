@@ -113,9 +113,18 @@ export class Waveform {
 		this.peaks = null;
 	}
 
-	setSong(samples: Float32Array, sampleRate: number, duration: number): void {
-		this.pyramid = buildPyramid(samples);
-		this.totalSamples = samples.length;
+	/**
+	 * ⚠️ Takes the pyramid, not the samples, and never sees a sample in its life.
+	 *
+	 * It used to take the mono downmix and build the pyramid here -- which meant the caller had to
+	 * hold that downmix while it called, and in practice held it for the whole of opening a song:
+	 * through decoding, through loading the picture, through reading and writing the note. The
+	 * engine builds the pyramid inside `load()` now, so sample-grade memory never crosses this
+	 * boundary and dies with the decode.
+	 */
+	setSong(pyramid: Float32Array[], totalSamples: number, sampleRate: number, duration: number): void {
+		this.pyramid = pyramid;
+		this.totalSamples = totalSamples;
 		this.sampleRate = sampleRate;
 		this.duration = duration;
 		this.viewStart = 0;
@@ -631,17 +640,31 @@ export const PYRAMID_BASE = 64;
  * one, so the whole structure costs a little over one pass and about 1/24th of the memory the raw
  * samples took. The caller drops the samples immediately afterwards.
  */
-export function buildPyramid(samples: Float32Array): Float32Array[] {
+/**
+ * Builds the pyramid straight from the decoded channels, downmixing a bucket at a time.
+ *
+ * ⚠️ The channels go in, not a mono mixdown of them, and that is the whole point of the signature.
+ * Averaging the channels first means allocating one more full-length `Float32Array` -- **219 MB on
+ * the 19-minute Woodstock file** -- purely to read it once and throw it away. Folded into the
+ * bucket loop it costs nothing at all: the same arithmetic happens, and the result is the same
+ * pyramid, but the peak allocation during a load falls by the size of the song.
+ *
+ * Averaged rather than summed, so a mono file and a dual-mono file draw identically.
+ */
+export function buildPyramid(channels: Float32Array[], length: number): Float32Array[] {
 	const levels: Float32Array[] = [];
-	const buckets = Math.max(1, Math.ceil(samples.length / PYRAMID_BASE));
+	const count = channels.length;
+	const buckets = Math.max(1, Math.ceil(length / PYRAMID_BASE));
 	const base = new Float32Array(buckets * 2);
 	for (let b = 0; b < buckets; b++) {
 		const from = b * PYRAMID_BASE;
-		const to = Math.min(samples.length, from + PYRAMID_BASE);
+		const to = Math.min(length, from + PYRAMID_BASE);
 		let min = 0;
 		let max = 0;
 		for (let i = from; i < to; i++) {
-			const v = samples[i];
+			let v = 0;
+			for (let c = 0; c < count; c++) v += channels[c][i];
+			if (count > 1) v /= count;
 			if (v < min) min = v;
 			else if (v > max) max = v;
 		}

@@ -1,6 +1,7 @@
 import SignalsmithStretch, { StretchNode } from "signalsmith-stretch";
 import { ChannelMode, channelMatrix } from "./channels";
 import { MIN_PASS, Switch, audibleAt, passLength, responseSwitches } from "./callresponse";
+import { buildPyramid } from "./waveform";
 
 /**
  * 📌 Measured, not chosen — 3 September 2026, Tests H and J on both an Intel Mac and an iPad.
@@ -69,13 +70,17 @@ export interface LoadedSong {
 	/** 1 or 2. A mono file is shown no channel controls at all -- there is nothing to separate. */
 	channels: number;
 	/**
-	 * Mono downmix, kept for drawing the waveform at any zoom.
+	 * The waveform's min/max pyramid, built here so no sample-grade array outlives the decode.
 	 *
-	 * ⚠️ Phase 4 (iOS) has to do better than this. A 19-minute video is ~220 MB here on top of the
-	 * copy the worklet holds. On a Mac with a 3-minute mp3 it is nothing; on an iPad it is the
-	 * whole problem. The fix is a min/max pyramid built at load and the samples then freed.
+	 * This used to be `peaksSource`, a full mono downmix -- 219 MB for the 19-minute Woodstock
+	 * file, on top of the copy the worklet holds and the decoded buffer it came from, and held by
+	 * the caller for the whole of opening a song. About 8 MB now, and gone from every scope but
+	 * the waveform's.
 	 */
-	peaksSource: Float32Array;
+	pyramid: Float32Array[];
+	totalSamples: number;
+	/** What this song costs while it is open, in bytes. Arithmetic, not a measurement. */
+	bytesHeld: number;
 }
 
 /**
@@ -168,9 +173,23 @@ export class Engine {
 		for (let c = 0; c < Math.min(2, buffer.numberOfChannels); c++) {
 			channels.push(buffer.getChannelData(c));
 		}
-		// No transfer list, so these are structured-cloned rather than detached and the AudioBuffer
-		// survives long enough to be downmixed below.
+		// ⚠️ No transfer list, so these are structured-cloned rather than detached -- which is what
+		// keeps the AudioBuffer readable long enough to build the pyramid from it below. It also
+		// means both copies exist at once, and for a 19-minute file that is 438 MB twice over. That
+		// is the part of risk 4 still standing: undoing it needs a decoder that can be fed a range
+		// of the file, and `decodeAudioData` only takes the whole thing.
 		await node.addBuffers(channels);
+
+		/*
+		 * The pyramid is built here, from the very arrays just handed to the worklet, and the
+		 * decoded buffer dies with this method.
+		 *
+		 * ⚠️ Ordering is the whole trick. Built from `channels` rather than from a mono downmix,
+		 * nothing full-length is allocated; built *inside* `load()`, nothing sample-grade is
+		 * returned. Before this, opening the Woodstock file allocated a 219 MB downmix and the
+		 * caller then held it through the video load and two vault round-trips.
+		 */
+		const pyramid = buildPyramid(channels, buffer.length);
 
 		this.duration = buffer.duration;
 		this.state.playing = false;
@@ -188,7 +207,13 @@ export class Engine {
 			duration: buffer.duration,
 			sampleRate: buffer.sampleRate,
 			channels: buffer.numberOfChannels,
-			peaksSource: downmix(buffer),
+			pyramid,
+			totalSamples: buffer.length,
+			// The worklet's copy plus the pyramid: what is still resident once the decode is
+			// collected. Computed, never measured -- there is no heap instrument on iOS, and a
+			// silent one reads as a clean one.
+			bytesHeld:
+				buffer.length * channels.length * 4 + pyramid.reduce((n, level) => n + level.byteLength, 0),
 		};
 	}
 
@@ -565,19 +590,6 @@ export class Engine {
  * one today) -- and it must be validated by inducing a real dropout (`splitComputation: false`
  * reproduces Test J2's crackle) before a single reading from it is believed.
  */
-
-/** One channel of peaks-grade samples. Averaged, not summed, so a mono file reads the same. */
-function downmix(buffer: AudioBuffer): Float32Array {
-	const length = buffer.length;
-	const out = new Float32Array(length);
-	const channels = Math.min(2, buffer.numberOfChannels);
-	for (let c = 0; c < channels; c++) {
-		const data = buffer.getChannelData(c);
-		for (let i = 0; i < length; i++) out[i] += data[i];
-	}
-	if (channels > 1) for (let i = 0; i < length; i++) out[i] /= channels;
-	return out;
-}
 
 function clamp(value: number, low: number, high: number): number {
 	return Math.min(high, Math.max(low, value));

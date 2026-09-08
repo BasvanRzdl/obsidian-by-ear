@@ -53,6 +53,15 @@ const FRAME = 1 / 30;
 /** A tap this long after the previous one starts a new count rather than a very slow tempo. */
 const TAP_RESET_MS = 2500;
 
+/**
+ * Above this, a song is worth mentioning when it opens.
+ *
+ * 400 MB is roughly a seventeen-minute stereo file at 48 kHz, which in this folder means the
+ * Woodstock medley and nothing else. Low enough to catch the file that raised the risk, high
+ * enough that an ordinary song never says a word.
+ */
+const HEAVY_BYTES = 400e6;
+
 type TabId = "marks" | "notes" | "tune" | "loop";
 
 export class PlayerView extends ItemView {
@@ -991,20 +1000,29 @@ export class PlayerView extends ItemView {
 		this.setStatus(`Reading ${entry.name}…`, true);
 		try {
 			/*
-			 * One read, then one decode. The order matters on a phone.
+			 * One read, then one decode, and a Blob only where there is a picture to show.
 			 *
-			 * `decodeAudioData` detaches the ArrayBuffer it is given, so the video cannot share it.
-			 * On iOS the cache hands back a Blob, so the picture costs nothing extra and the bytes
-			 * for decoding are pulled out of it once. On desktop the file is read as bytes and the
-			 * Blob is made from them before decoding frees them -- a transient second copy, which is
-			 * affordable on a Mac and is not on a phone. That asymmetry is the whole reason the
-			 * cache stores Blobs.
+			 * `decodeAudioData` detaches the ArrayBuffer it is given, so the video cannot share it
+			 * -- the encoded file has to exist twice for a moment whatever we do. What it does not
+			 * have to do is exist three times, which is what the desktop path used to cost: read the
+			 * bytes, copy them into a Blob, then copy them *back out* of it with
+			 * `blob.arrayBuffer()`. On the 349 MB Woodstock file that third copy is 349 MB spent to
+			 * arrive back where we started. Desktop now decodes the bytes it read.
+			 *
+			 * ⚠️ And an audio-only file gets no Blob at all. Nothing shows the picture of an mp3, so
+			 * building one copies the whole file in order to drop it unread.
 			 */
-			const blob =
-				entry.source === "cache"
-					? await readCachedBlob(entry.name)
-					: new Blob([readMedia(entry.path)], { type: mimeFor(entry.name) });
-			const bytes = await blob.arrayBuffer();
+			let blob: Blob | null = null;
+			let bytes: ArrayBuffer;
+			if (entry.source === "cache") {
+				// On iOS the cache *is* Blob storage, so this copy already exists.
+				const cached = await readCachedBlob(entry.name);
+				bytes = await cached.arrayBuffer();
+				if (entry.video) blob = cached;
+			} else {
+				bytes = readMedia(entry.path);
+				if (entry.video) blob = new Blob([bytes], { type: mimeFor(entry.name) });
+			}
 
 			const started = performance.now();
 			const song = await this.engine.load(bytes, entry.name);
@@ -1015,14 +1033,14 @@ export class PlayerView extends ItemView {
 			const stereo = song.channels > 1;
 			if (this.el.channelRow) this.el.channelRow.hidden = !stereo;
 			if (this.el.channelNote) this.el.channelNote.hidden = stereo;
-			this.waveform?.setSong(song.peaksSource, song.sampleRate, song.duration);
+			this.waveform?.setSong(song.pyramid, song.totalSamples, song.sampleRate, song.duration);
 			this.renderSongName();
 
 			// A file whose audio decoded but whose picture will not show should still play -- but it
 			// must SAY so. A blank box where a video should be is exactly the silent failure this
 			// project keeps relearning: v0.4.0 showed one on iOS for two days and reported nothing.
 			let pictureNote = "";
-			if (entry.video) {
+			if (entry.video && blob) {
 				const result = await this.video?.load(blob);
 				if (result && !result.ok) {
 					// Says what went wrong and what it was handed, because the next move depends on
@@ -1055,8 +1073,21 @@ export class PlayerView extends ItemView {
 			else
 				this.setStatus(
 					`${stripExtension(entry.name)} · ${formatTime(song.duration)} · ` +
-						`${song.sampleRate} Hz · decoded in ${Math.round(performance.now() - started)} ms`
+						`${song.sampleRate} Hz · decoded in ${Math.round(performance.now() - started)} ms · ` +
+						`${megabytes(song.bytesHeld)} held`
 				);
+
+			// ⚠️ Said once, at the only moment anything can be done about it, and only for the few
+			// files big enough to matter. A 19-minute medley costs about half a gigabyte to keep
+			// open, and on a 3 GB iPad that is the difference between a long practice and a crash
+			// with no explanation. `media_start` / `media_end` are read from the note already;
+			// nothing in the vault sets them yet.
+			if (song.bytesHeld > HEAVY_BYTES) {
+				new Notice(
+					`By Ear: ${stripExtension(entry.name)} is ${formatTime(song.duration)} long and holds ` +
+						`${megabytes(song.bytesHeld)} while it is open. On an iPad, prefer a shorter file.`
+				);
+			}
 		} catch (error) {
 			const why = message(error);
 			new Notice(`By Ear could not open that file: ${why}`);
@@ -1812,6 +1843,10 @@ export class PlayerView extends ItemView {
 			}, 6000);
 		}
 	}
+}
+
+function megabytes(bytes: number): string {
+	return `${Math.round(bytes / 1e6)} MB`;
 }
 
 function stripExtension(name: string): string {
