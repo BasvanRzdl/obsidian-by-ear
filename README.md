@@ -4,11 +4,12 @@ An Obsidian plugin for learning songs by ear: loop a passage, slow it down, shif
 semitones **and cents**, watch the player's hands — and keep what you worked out in a note
 instead of locked inside an app.
 
-> **Status: Phase 1 — a working audio player on the desktop.** Waveform, transport, A→B looping,
-> tempo and pitch all work on macOS. Video is not shown yet (its *sound* plays fine), the song
-> notes are not written yet, and mobile is not wired up — those are Phases 2, 3 and 4. The Phase 0
-> spike that proved the engine viable is preserved at the `phase-0-spike` tag; the two hazard
-> notes it produced are further down this file and are still load-bearing.
+> **Status: Phase 5 — a working player on Mac, iPad and iPhone.** The waveform, transport, A→B
+> looping, tempo, pitch, the video, the song notes and the mobile file cache are all live and used
+> on real songs. Call & response and the channel mixer landed with this phase. What is left is the
+> rest of the loop features, the memory work for very long files, and a release pass. The Phase 0
+> spike that proved the engine viable is preserved at the `phase-0-spike` tag; the hazard notes it
+> produced are further down this file and are still load-bearing.
 
 ## Why
 
@@ -25,19 +26,24 @@ Obsidian already runs on all of them, and already syncs. So the player goes ther
 
 ## What works today
 
-- Load audio **or the soundtrack of a video** straight off disk, from a folder you point it at
+- Load audio **or a video** straight off disk on the desktop, or through the Files picker on
+  iPad and iPhone, where it is cached on the device
 - Waveform with zoom, click to seek, drag to set an A→B loop, nudge the edges by 10 ms
 - Tempo 25–150%, pitch-preserving
 - Pitch shift **independent of tempo**, in semitones *and* cents
+- The picture, slaved to the audio clock, so it can never drift from what you hear
+- Named marks and saved loops, written into the song's own note as plain markdown, along with
+  your findings and a dated log of sittings
+- **Call & response** — play the loop, then hear an equal silence to answer into
+- **Channel mixer** — left, right, mono, or side-only, which cancels whatever sits in the centre
 - Everything on the keyboard, so your hands stay near the guitar
 
 ## What is still coming
 
-- The picture, kept in sync by slaving the video to the audio clock
-- Named marks and saved loops, written into the song's own note as plain markdown
-- A sitting log, so you can see what you actually worked on
-- iPad and iPhone, through the Files picker, so iCloud Drive works there too
-- Call & response, Step-It-Up, and a channel mixer
+- Step-It-Up: loop at 60% and climb 5% a pass until you are at tempo
+- Loop pre-roll and tail padding, so you come in on time and nothing is clipped
+- Streaming very long files instead of holding them in memory
+- A release pass: community store submission
 
 ## What it will never do
 
@@ -78,8 +84,12 @@ headphones icon in the ribbon.
 |---|---|
 | `space` | play / pause |
 | `←` `→` | nudge 1 s (shift: 5 s) |
+| `M` / `S` | drop a mark here / loop this section, mark to mark |
 | `A` `B` | set the loop start / end at the playhead |
 | `L` / `X` | loop on-off / clear the loop |
+| `C` | call & response on / off |
+| `F` / `esc` | full screen, and back |
+| `⌘/ctrl S` | write the ledger to the note |
 | `[` `]` | nudge A by 10 ms (shift: nudge B) |
 | `↑` `↓` | tempo ± 5% |
 | `-` `=` | pitch ± 1 semitone (shift: ± 10 cents) |

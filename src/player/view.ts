@@ -5,6 +5,7 @@ import { Waveform } from "./waveform";
 import { VideoScreen } from "./video";
 import { LibraryModal } from "./library";
 import { TimeModal } from "./time";
+import { CHANNEL_LABELS, CHANNEL_MODES, CHANNEL_NAMES, ChannelMode } from "./channels";
 import { MediaEntry, listMedia, mimeFor, readMedia } from "../media";
 import {
 	KeepAwake,
@@ -52,7 +53,7 @@ const FRAME = 1 / 30;
 /** A tap this long after the previous one starts a new count rather than a very slow tempo. */
 const TAP_RESET_MS = 2500;
 
-type TabId = "marks" | "notes" | "tune";
+type TabId = "marks" | "notes" | "tune" | "loop";
 
 export class PlayerView extends ItemView {
 	private plugin: ByEarPlugin;
@@ -117,6 +118,11 @@ export class PlayerView extends ItemView {
 		tabs: [] as HTMLButtonElement[],
 		panes: {} as Record<TabId, HTMLElement>,
 		markList: null as HTMLElement | null,
+		callResponse: null as HTMLButtonElement | null,
+		crState: null as HTMLElement | null,
+		channelRow: null as HTMLElement | null,
+		channelNote: null as HTMLElement | null,
+		channelButtons: new Map<ChannelMode, HTMLButtonElement>(),
 	};
 
 	constructor(leaf: WorkspaceLeaf, plugin: ByEarPlugin) {
@@ -519,6 +525,9 @@ export class PlayerView extends ItemView {
 			["marks", "Marks", "⚑"],
 			["notes", "Notes", "✎"],
 			["tune", "Tune", "♯"],
+			// ⚠️ Phase 5 lands here and not in the rail, and that was decided before it was built
+			// (spec §11a, §11f): the tab strip is the growth mechanism, the rail is full.
+			["loop", "Loop", "↻"],
 		];
 		for (const [id, label, glyph] of tabs) {
 			const tab = this.button(strip, "", label, () => this.showTab(id), "by-ear-tab");
@@ -537,6 +546,7 @@ export class PlayerView extends ItemView {
 		this.el.markList = this.el.panes.marks.createDiv({ cls: "by-ear-marklist" });
 		this.buildNotesPane(this.el.panes.notes);
 		this.buildTunePane(this.el.panes.tune);
+		this.buildLoopPane(this.el.panes.loop);
 		this.showTab("marks");
 		this.renderMarkList();
 	}
@@ -649,6 +659,7 @@ export class PlayerView extends ItemView {
 			["S", "loop this section (mark to mark)"],
 			["A / B", "set loop start / end at the playhead"],
 			["L", "loop on / off"],
+			["C", "call & response on / off"],
 			["X", "clear the loop"],
 			["[ ]", "nudge A by 10 ms  (shift: nudge B)"],
 			["↑ ↓", `tempo ± ${RATE_STEP}%`],
@@ -660,6 +671,117 @@ export class PlayerView extends ItemView {
 			list.createEl("dt", { text: key });
 			list.createEl("dd", { text: what });
 		}
+	}
+
+	/**
+	 * The Loop tab -- Phase 5, and the two features that make this better than what he can buy.
+	 *
+	 * Both are about the *loop* rather than the song, which is what makes them one tab: call &
+	 * response answers "can I play it back", the channel mixer answers "can I hear it at all".
+	 */
+	private buildLoopPane(root: HTMLElement): void {
+		root.createDiv({ cls: "by-ear-lbl", text: "Call & response" });
+		const row = root.createDiv({ cls: "by-ear-row" });
+		this.el.callResponse = this.button(
+			row,
+			"🗣 Call & response",
+			"Play the loop, then leave an equal silence to answer into (c)",
+			() => this.toggleCallResponse(),
+			"by-ear-grow"
+		);
+		// Live, because the whole feature is a thing you cannot see -- silence looks identical to a
+		// player that has stopped, and this project has spent days on failures that reported nothing.
+		this.el.crState = root.createDiv({ cls: "by-ear-cr-state", text: "" });
+
+		root.createDiv({ cls: "by-ear-lbl", text: "Channels" });
+		const channels = root.createDiv({ cls: "by-ear-row by-ear-channels" });
+		this.el.channelRow = channels;
+		this.el.channelButtons.clear();
+		for (const mode of CHANNEL_MODES) {
+			const button = this.button(channels, CHANNEL_LABELS[mode], CHANNEL_NAMES[mode], () =>
+				this.setChannel(mode)
+			);
+			this.el.channelButtons.set(mode, button);
+		}
+		// Shown only where it is the answer: a mono file has nothing to separate, so the row above
+		// is absent rather than five buttons of which four do nothing.
+		this.el.channelNote = root.createDiv({
+			cls: "by-ear-empty",
+			text: "This recording is mono — there are no sides to separate.",
+		});
+		this.el.channelNote.hidden = true;
+
+		this.syncLoopFeatures();
+	}
+
+	/**
+	 * ⚠️ Never a silent no-op, the same rule Loop itself follows.
+	 *
+	 * Arming call & response with nothing to loop used to be the obvious shape for this control, and
+	 * it is the shape that has burned this project five times: a press, no sound, no explanation. So
+	 * it makes the loop it needs -- the section the playhead stands in, or two seconds from here --
+	 * arms it, and only then opens the gate.
+	 */
+	private toggleCallResponse(): void {
+		if (this.engine.callResponse) {
+			this.engine.setCallResponse(false);
+			this.syncLoopFeatures();
+			return;
+		}
+		if (!this.engine.hasLoop()) this.toggleLoop();
+		if (this.engine.hasLoop() && !this.engine.transport.looping) {
+			this.engine.setLooping(true);
+			this.syncLoopUi();
+		}
+		this.engine.setCallResponse(true);
+		if (!this.engine.callResponseReady) {
+			this.setStatus(
+				"Call & response needs a longer loop — a pass has to last at least a quarter second.",
+				true
+			);
+		}
+		this.syncLoopFeatures();
+	}
+
+	private setChannel(mode: ChannelMode): void {
+		this.engine.setChannelMode(mode);
+		this.syncLoopFeatures();
+	}
+
+	/** The two-weight vocabulary for this tab: filled is engaged, and one channel mode always is. */
+	private syncLoopFeatures(): void {
+		this.el.callResponse?.toggleClass("is-on", this.engine.callResponse);
+		for (const [mode, button] of this.el.channelButtons) {
+			button.toggleClass("is-on", this.engine.mode === mode);
+		}
+		this.renderCallResponse();
+	}
+
+	/**
+	 * What the gate is doing, in words.
+	 *
+	 * "Answer" rather than a countdown or a bar: the gap is a musical length, and a number ticking
+	 * down during it is one more thing pulling the eye off the guitar.
+	 */
+	private renderCallResponse(): void {
+		const el = this.el.crState;
+		if (!el) return;
+		let text = "";
+		let answering = false;
+		if (!this.engine.callResponse) {
+			text = "Off — the loop plays, then leaves an equal silence to answer into.";
+		} else if (!this.engine.callResponseReady) {
+			text = "Waiting for a loop long enough to answer — a quarter second at the least.";
+		} else if (!this.engine.transport.playing) {
+			text = "Armed. Press play.";
+		} else if (this.engine.responding) {
+			text = "Your turn.";
+			answering = true;
+		} else {
+			text = "Listen.";
+		}
+		el.setText(text);
+		el.toggleClass("is-answering", answering);
 	}
 
 	// ------------------------------------------------------------------ zone A: the stage
@@ -888,6 +1010,11 @@ export class PlayerView extends ItemView {
 			const song = await this.engine.load(bytes, entry.name);
 			this.current = entry;
 			this.duration = song.duration;
+			// Absent rather than disabled: on a mono file every mode but Stereo is a no-op, and four
+			// buttons that do nothing are worse than none.
+			const stereo = song.channels > 1;
+			if (this.el.channelRow) this.el.channelRow.hidden = !stereo;
+			if (this.el.channelNote) this.el.channelNote.hidden = stereo;
 			this.waveform?.setSong(song.peaksSource, song.sampleRate, song.duration);
 			this.renderSongName();
 
@@ -913,6 +1040,7 @@ export class PlayerView extends ItemView {
 			this.resetKnobs();
 			this.taps = [];
 			this.syncLoopUi();
+			this.syncLoopFeatures();
 			this.dirty = true;
 			// After resetKnobs, so a saved tempo and pitch win over the defaults.
 			await this.loadLedger(entry);
@@ -1540,6 +1668,10 @@ export class PlayerView extends ItemView {
 			case "L":
 				this.toggleLoop();
 				break;
+			case "c":
+			case "C":
+				this.toggleCallResponse();
+				break;
 			case "x":
 			case "X":
 				this.engine.setLoop(null, null);
@@ -1605,6 +1737,8 @@ export class PlayerView extends ItemView {
 		this.video?.follow(position, playing, this.engine.transport.rate);
 
 		this.el.clock?.setText(`${formatTime(position)} / ${formatTime(this.duration)}`);
+		// Silence is indistinguishable from a stopped player, so the gate says which it is.
+		this.renderCallResponse();
 		if (this.el.playButton) {
 			setIcon(this.el.playButton, playing ? "pause" : "play");
 			// ⚠️ Lit only while playing. Filled means *engaged* and nothing else -- a permanently

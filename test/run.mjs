@@ -13,6 +13,8 @@ const modules = [
 	["src/player/waveform.ts", "waveform"],
 	["src/player/video.ts", "video"],
 	["src/player/time.ts", "time"],
+	["src/player/callresponse.ts", "callresponse"],
+	["src/player/channels.ts", "channels"],
 ];
 
 for (const [entry, name] of modules) {

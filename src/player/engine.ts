@@ -1,4 +1,6 @@
 import SignalsmithStretch, { StretchNode } from "signalsmith-stretch";
+import { ChannelMode, channelMatrix } from "./channels";
+import { MIN_PASS, Switch, audibleAt, passLength, responseSwitches } from "./callresponse";
 
 /**
  * 📌 Measured, not chosen — 3 September 2026, Tests H and J on both an Intel Mac and an iPad.
@@ -34,6 +36,21 @@ const LOOKAHEAD = 0.05;
 /** Below this a loop region is treated as no loop at all. Matches the library's own test. */
 const MIN_LOOP = 0.01;
 
+/**
+ * Call & response, in seconds.
+ *
+ * The horizon is long on purpose. The pump runs on `requestAnimationFrame`, and a browser that
+ * stops painting -- Obsidian behind another window, an iPad whose screen has gone off while the
+ * music keeps playing -- would leave the gate wherever it last landed. Twelve seconds of plan
+ * outlives that; the cost is a few dozen automation events, which is nothing.
+ *
+ * The ramp is what keeps the gate from clicking. 8 ms is inaudible as a fade and comfortably
+ * longer than the discontinuity it covers.
+ */
+const CR_HORIZON = 12;
+const CR_MARGIN = 6;
+const CR_RAMP = 0.008;
+
 export interface EngineState {
 	playing: boolean;
 	/** 1.0 == original speed. */
@@ -49,6 +66,8 @@ export interface LoadedSong {
 	name: string;
 	duration: number;
 	sampleRate: number;
+	/** 1 or 2. A mono file is shown no channel controls at all -- there is nothing to separate. */
+	channels: number;
 	/**
 	 * Mono downmix, kept for drawing the waveform at any zoom.
 	 *
@@ -75,7 +94,15 @@ export interface LoadedSong {
 export class Engine {
 	private ctx: AudioContext | null = null;
 	private node: StretchNode | null = null;
-	private gain: GainNode | null = null;
+	/**
+	 * The output gain, and the only thing call & response touches.
+	 *
+	 * Everything the player does to the sound after the stretcher hangs off these two: the mixer
+	 * matrix, then this. `node -> splitter -> 4 gains -> merger -> master -> destination`.
+	 */
+	private master: GainNode | null = null;
+	/** The 2x2 mixer, indexed `[out * 2 + in]` to match `channelMatrix()`. */
+	private mix: GainNode[] = [];
 
 	private duration = 0;
 	private state: EngineState = {
@@ -90,6 +117,13 @@ export class Engine {
 	/** The last scheduled segment, mirrored so the playhead needs no messages from the worklet. */
 	private anchorInput = 0;
 	private anchorOutput = 0;
+
+	private channelMode: ChannelMode = "stereo";
+	/** Call & response: armed by the user, and only actually gating while a loop is running. */
+	private cr = false;
+	/** The gate plan, and the state it started in. Both are needed to answer "audible right now?". */
+	private crSwitches: Switch[] = [];
+	private crFrom = { at: 0, audible: true };
 
 	/** Fires when the engine stops itself at the end of the song. */
 	onEnded: (() => void) | null = null;
@@ -145,11 +179,15 @@ export class Engine {
 		this.state.looping = false;
 		this.anchorInput = 0;
 		this.anchorOutput = ctx.currentTime;
+		// A new song is heard, whatever the last one was left doing.
+		this.cr = false;
+		this.planCallResponse(true);
 
 		return {
 			name,
 			duration: buffer.duration,
 			sampleRate: buffer.sampleRate,
+			channels: buffer.numberOfChannels,
 			peaksSource: downmix(buffer),
 		};
 	}
@@ -174,6 +212,9 @@ export class Engine {
 		this.anchorInput = frozen;
 		this.anchorOutput = at;
 		this.node.schedule({ output: at, input: frozen, active: false });
+		// ⚠️ Never leave the gate closed on a paused player: pressing play would then be silent
+		// until the next seam, which is the silent-no-op shape this project keeps relearning.
+		this.planCallResponse(true);
 	}
 
 	toggle(): void {
@@ -220,6 +261,57 @@ export class Engine {
 		this.commit({});
 	}
 
+	// ------------------------------------------------------------------ the loop features
+
+	get mode(): ChannelMode {
+		return this.channelMode;
+	}
+
+	/**
+	 * Which channels reach both ears.
+	 *
+	 * Ramped rather than set, because a step in gain on a running signal is a click. 10 ms is
+	 * below the ear's resolution for a level change and above the sample rate's for a jump.
+	 */
+	setChannelMode(mode: ChannelMode): void {
+		this.channelMode = mode;
+		if (!this.ctx || this.mix.length !== 4) return;
+		const matrix = channelMatrix(mode);
+		const now = this.ctx.currentTime;
+		for (let out = 0; out < 2; out++) {
+			for (let input = 0; input < 2; input++) {
+				this.mix[out * 2 + input]?.gain.setTargetAtTime(matrix[out][input], now, 0.01);
+			}
+		}
+	}
+
+	get callResponse(): boolean {
+		return this.cr;
+	}
+
+	/**
+	 * Whether a gap long enough to answer into can be made from the loop as it stands.
+	 *
+	 * A pass is measured in real time, not song time, so slowing down lengthens it -- a two-bar
+	 * phrase at 50% is twice the gap. Below a quarter of a second it is a stutter, not a phrase.
+	 */
+	get callResponseReady(): boolean {
+		const { loopA, loopB, rate } = this.state;
+		if (loopA === null || loopB === null) return false;
+		return passLength(loopA, loopB, rate) >= MIN_PASS;
+	}
+
+	/** True while the loop is running silently, waiting for an answer. */
+	get responding(): boolean {
+		if (!this.cr || !this.state.playing || !this.state.looping || !this.ctx) return false;
+		return !audibleAt(this.crSwitches, this.crFrom.audible, this.ctx.currentTime);
+	}
+
+	setCallResponse(on: boolean): void {
+		this.cr = on;
+		this.planCallResponse(true);
+	}
+
 	setLooping(on: boolean): void {
 		if (on && !this.hasLoop()) return;
 		this.state.looping = on;
@@ -246,9 +338,11 @@ export class Engine {
 		return this.positionAt(this.ctx.currentTime - this.ctx.baseLatency);
 	}
 
-	/** Call once per frame while playing: stops the transport when the song runs out. */
+	/** Call once per frame while playing: keeps the gate planned, and stops at the end of the song. */
 	tick(): void {
-		if (!this.state.playing || this.state.looping) return;
+		if (!this.state.playing) return;
+		this.planCallResponse(false);
+		if (this.state.looping) return;
 		if (this.position() >= this.duration - 0.005) {
 			this.pause();
 			this.anchorInput = this.duration;
@@ -258,7 +352,8 @@ export class Engine {
 
 	async destroy(): Promise<void> {
 		this.node = null;
-		this.gain = null;
+		this.master = null;
+		this.mix = [];
 		// The only way to retire a leaked processor. Everything else in this file depends on it.
 		try {
 			await this.ctx?.close();
@@ -309,6 +404,77 @@ export class Engine {
 
 		this.anchorInput = input;
 		this.anchorOutput = at;
+
+		// ⚠️ Rebuilt, not extended, and it restarts on a heard pass. Every change of tempo, pitch,
+		// loop or position invalidates the arithmetic the plan was built from -- and "change
+		// something and you hear the next pass" is a rule worth being able to state in one line.
+		this.planCallResponse(true);
+	}
+
+	/**
+	 * Writes the gate onto the output gain, ahead of time, on the audio clock.
+	 *
+	 * `rebuild` is the difference between "something changed, work it out again" and the pump's
+	 * "top the plan up before it runs out". A rebuild always lands on a heard pass, so the answer
+	 * to "why did it go quiet?" is never something the user has to reconstruct.
+	 *
+	 * ⚠️ `cancelScheduledValues` alone does not stop a ramp already under way, and
+	 * `cancelAndHoldAtTime` is not something an iPad WebView can be relied on for -- so the current
+	 * value is read and pinned by hand before anything new is written. Without the pin, a cancel
+	 * mid-fade leaves the gain at an arbitrary level for ever.
+	 */
+	private planCallResponse(rebuild: boolean): void {
+		const param = this.master?.gain;
+		if (!param || !this.ctx) return;
+		const now = this.ctx.currentTime;
+		const { loopA, loopB, looping, playing, rate } = this.state;
+		const gating = this.cr && playing && looping && this.callResponseReady;
+
+		if (!gating) {
+			// Nothing to undo: leave the parameter alone rather than writing an event per frame.
+			if (this.crSwitches.length === 0 && this.crFrom.audible) return;
+			param.cancelScheduledValues(now);
+			param.setValueAtTime(param.value, now);
+			param.linearRampToValueAtTime(1, now + CR_RAMP);
+			this.crSwitches = [];
+			this.crFrom = { at: now, audible: true };
+			return;
+		}
+
+		const planned = this.crSwitches[this.crSwitches.length - 1];
+		if (!rebuild && planned && planned.at > now + CR_MARGIN) return;
+
+		const audible = rebuild ? true : audibleAt(this.crSwitches, this.crFrom.audible, now);
+		param.cancelScheduledValues(now);
+		param.setValueAtTime(param.value, now);
+		param.linearRampToValueAtTime(audible ? 1 : 0, now + CR_RAMP);
+
+		const switches = responseSwitches({
+			now,
+			// ⚠️ NOT `position()`, and the difference is the point. `position()` answers "what am I
+			// hearing", so it subtracts the output latency; these samples have not been heard yet.
+			// The gate acts on audio as it passes the gain node, so it has to be timed against the
+			// samples in the graph right now -- otherwise every flip lands `baseLatency` early.
+			//
+			// It is also exactly right across a scheduled change: extrapolating the newly scheduled
+			// segment back over the lookahead gap gives the same arrival time at the seam that the
+			// worklet will produce, even when the change was a seek to somewhere else entirely.
+			position: this.positionAt(now),
+			rate,
+			loopA: loopA as number,
+			loopB: loopB as number,
+			horizon: CR_HORIZON,
+			audible,
+		});
+		for (const flip of switches) {
+			// The ramp begins *at* the seam rather than before it, so a call is never clipped short
+			// -- the 8 ms of fade is spent on the front of the silence, where there is nothing to
+			// lose.
+			param.setValueAtTime(flip.audible ? 0 : 1, flip.at);
+			param.linearRampToValueAtTime(flip.audible ? 1 : 0, flip.at + CR_RAMP);
+		}
+		this.crSwitches = switches;
+		this.crFrom = { at: now, audible };
 	}
 
 	private async context(): Promise<AudioContext> {
@@ -344,9 +510,35 @@ export class Engine {
 
 		node.configure(ENGINE_CONFIG);
 
-		this.gain = ctx.createGain();
-		node.connect(this.gain);
-		this.gain.connect(ctx.destination);
+		/*
+		 * node -> splitter -> four gains -> merger -> master -> destination.
+		 *
+		 * The four gains are a 2x2 matrix, which is enough for all five channel modes without the
+		 * graph ever changing shape: only its numbers move, and they move on ramps. `side` needs the
+		 * negative coefficient, which is why this is a matrix and not a pair of switches.
+		 *
+		 * The master is separate from the matrix because call & response has to be able to close the
+		 * gate without disturbing which channels are selected, and vice versa.
+		 */
+		const splitter = ctx.createChannelSplitter(2);
+		const merger = ctx.createChannelMerger(2);
+		this.mix = [];
+		for (let out = 0; out < 2; out++) {
+			for (let input = 0; input < 2; input++) {
+				const gain = ctx.createGain();
+				gain.gain.value = out === input ? 1 : 0;
+				splitter.connect(gain, input);
+				gain.connect(merger, 0, out);
+				this.mix[out * 2 + input] = gain;
+			}
+		}
+
+		this.master = ctx.createGain();
+		node.connect(splitter);
+		merger.connect(this.master);
+		this.master.connect(ctx.destination);
+		// A song opened with a mode already chosen should sound the way the button says it does.
+		this.setChannelMode(this.channelMode);
 
 		this.node = node;
 		return node;

@@ -621,6 +621,39 @@
   padding: 0 14px;
 }
 
+/* --- loop --- */
+
+/* Five modes, and a rail that can be 256 px wide. They wrap rather than shrink: a target below
+   44 px is not a target, and the design says so on both axes. */
+.by-ear-channels {
+  flex-wrap: wrap;
+}
+
+.by-ear-player .by-ear-channels .by-ear-b {
+  flex: 1 1 44px;
+  min-width: var(--tap);
+  padding: 0 6px;
+  font-size: 13.5px;
+}
+
+/* ⚠️ The one place in the player where a line of text has a job to do while both hands are busy.
+   Silence looks exactly like a player that has stopped, so this says which it is — and it says it
+   in the accent, big enough to read from a music stand, at the moment it is your turn. */
+.by-ear-cr-state {
+  min-height: 20px;
+  padding: 2px 2px 4px;
+  color: var(--tx3);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.by-ear-cr-state.is-answering {
+  color: var(--acc);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 /* --- tune --- */
 
 .by-ear-player .by-ear-reset .by-ear-b {
