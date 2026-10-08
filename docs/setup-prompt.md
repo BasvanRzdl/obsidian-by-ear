@@ -28,11 +28,11 @@ and don't move on until a step has worked.
      https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugins.json.
      If it is: tell me to install it via Settings > Community plugins > Browse > "By Ear".
    - If not: download main.js, manifest.json and styles.css from
-     https://github.com/BasvanRzdl/obsidian-by-ear/releases/download/1.0.1/<file>
+     https://github.com/BasvanRzdl/obsidian-by-ear/releases/download/1.0.2/<file>
      into <vault>/.obsidian/plugins/by-ear/.
    - Either way, check the three files against the SHA-256 list at the bottom of this message.
-     If the store gave me a newer version than 1.0.1, the hashes will differ: tell me that and
-     continue. If the version IS 1.0.1 and a hash differs, stop and tell me; don't enable it.
+     If the store gave me a newer version than 1.0.2, the hashes will differ: tell me that and
+     continue. If the version IS 1.0.2 and a hash differs, stop and tell me; don't enable it.
    - Either way, write <vault>/.obsidian/plugins/by-ear/data.json as
      {"mediaFolder": "<the song folder, absolute path>", "noteFolder": "By Ear"}
      (merge with the file if it already exists).
@@ -50,7 +50,7 @@ and don't move on until a step has worked.
 
 4. INSTALL THE /by-ear SKILL
    - Download SKILL.md and byear_fetch.py from
-     https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/1.0.1/skill/by-ear/<file>
+     https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/1.0.2/skill/by-ear/<file>
      into ~/.claude/skills/by-ear/ , and check both against the SHA-256 list below. If either
      differs, delete it, stop, and tell me. Read byear_fetch.py before running it and tell me in
      two lines what it does.
@@ -74,7 +74,8 @@ and don't move on until a step has worked.
      mixer (left, right, mono, side) helps hear one part.
    - Volume: the speaker and slider at the top; V mutes.
    - Notes: findings, marks and loops are saved into the song's note in the vault (Cmd/Ctrl+S or
-     Save). It only ever writes below a marker line at the bottom of a note.
+     Save), below a marker line at the bottom of the note. Opening a song links it to its note
+     (a `media:` line in the frontmatter) or creates a short one. Nothing else is ever edited.
    - Getting songs: "/by-ear Artist - Title" in Claude Code, or "/by-ear the live version of ...",
      or a YouTube link.
    - iPad/iPhone (if I said yes): install By Ear on the device too (the plugin folder syncs if I
@@ -86,9 +87,9 @@ Ground rules: By Ear deliberately never detects chords, keys or BPM and keeps no
 stats. Don't offer me chords or tabs unless I ask. If anything fails, show me the actual error and
 fix it before going on. Finish with a five-line cheat sheet of the keys I'll use most.
 
-SHA-256 (version 1.0.1):
-aeac421b47c9b46e73e8cb039377fa28eb8e93bb709f1ef4a1525cf6f5fb7808  main.js
-215204e31d28ff7560ffd0204fb451ee4eaccf09f0dbd80fbe22d9a8dff16301  manifest.json
+SHA-256 (version 1.0.2):
+1152611d61ef2fa0c32c8d3b96bb1938b02b7184b6dbf1d4af376101c41fd92b  main.js
+2e584241e9629251c9b96c381d353b48b585d8e931177c0817fd7b0237ae1843  manifest.json
 dac178af446a23474202c547582567c613f52fa45a6cfb08f24c907d46109bbd  styles.css
 1c8cc8c5738c90f1c245cd6022fc3d9677c64f632aed871fc356f826c4e65e4d  SKILL.md
 6a381a3024695cb4d4fbbf1dec9d9278c73218eabab05ed838286531d035e399  byear_fetch.py

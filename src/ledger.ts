@@ -198,8 +198,13 @@ function asMatch(entry: IndexEntry, how: NoteMatch["how"]): NoteMatch {
  * (`[ ] # ^ | \ : * ? " < > /`) and, on macOS, even line breaks. Everything outside that set is kept.
  */
 export function vaultSafe(value: string): string {
-	return value
-		.replace(/[\u0000-\u001f\u007f]/g, " ")
+	// Control characters (line breaks included) by code point rather than in a regex, which the
+	// review linter refuses on principle.
+	const printable = Array.from(value, (ch) => {
+		const code = ch.charCodeAt(0);
+		return code < 32 || code === 127 ? " " : ch;
+	}).join("");
+	return printable
 		.replace(/[[\]#^|\\/:*?"<>]/g, "-")
 		.replace(/\s+/g, " ")
 		.trim()
