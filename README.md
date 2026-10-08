@@ -145,6 +145,8 @@ your own machine, and that call is yours.
 ## Privacy and disclosures
 
 - **No network access.** Nothing is sent anywhere, and there is no telemetry.
+- **Every release is built and signed by GitHub Actions** from the tagged source, with a
+  build-provenance attestation you can check: `gh attestation verify main.js --repo BasvanRzdl/obsidian-by-ear`.
 - **Reads files outside your vault** on desktop: only the media folder you choose in settings,
   and only to play them.
 - **On iPad and iPhone**, songs you add are cached in the app's storage on that device, and can

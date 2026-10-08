@@ -52,12 +52,6 @@
   height: 100%;
   padding: 0;
   overflow: hidden;
-  /* ⚠️ !important, and not casually. This element IS Obsidian's own `.view-content`, and the vault's
-     "Desert at Night" snippet paints a scene on `.app-container` and clears the containers above it
-     — so on 6 September the player rendered with a volcano and cacti behind the tab strip. Every
-     zone below repeats the background for the same reason: one transparent child is enough to let
-     the scene back in. */
-  background: var(--ground) !important;
   color: var(--tx);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   font-size: 15px;
@@ -65,8 +59,19 @@
   -webkit-font-smoothing: antialiased;
 }
 
-.by-ear-player [hidden] {
-  display: none !important;
+/* ⚠️ This element IS Obsidian's own `.view-content`, and themes clear it: a vault snippet painting a
+   scene on `.app-container` sets `.theme-dark .view-content { background: transparent }` -- so on
+   6 September the player rendered with a volcano and cacti behind the tab strip. The selector is
+   doubled to outrank that (and the usual theme rules) without `!important`. Every zone below repeats
+   the background for the same reason: one transparent child is enough to let the scene back in. */
+.view-content.by-ear-player.by-ear-player {
+  background: var(--ground);
+}
+
+/* The `hidden` attribute has to beat every `display:` this stylesheet sets, including the three-class
+   mobile rules. Repeating the attribute raises specificity instead of reaching for `!important`. */
+.by-ear-player [hidden][hidden][hidden] {
+  display: none;
 }
 
 /* ⚠️ Obsidian's mobile navigation bar floats over the view rather than shortening it, so the last
@@ -549,10 +554,12 @@
 
 .by-ear-mk-flag {
   flex: 0 0 9px;
-  width: 9px;
-  height: 9px;
-  background: var(--acc);
-  clip-path: polygon(0 0, 100% 50%, 0 100%);
+  width: 0;
+  height: 0;
+  /* A triangle drawn with borders, which every WebView supports, rather than `clip-path`. */
+  border-top: 4.5px solid transparent;
+  border-bottom: 4.5px solid transparent;
+  border-left: 9px solid var(--acc);
 }
 
 .by-ear-mk-name {

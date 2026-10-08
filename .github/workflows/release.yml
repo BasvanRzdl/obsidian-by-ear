@@ -1,0 +1,48 @@
+# Builds every release on GitHub's machines, from the tagged source, and signs what it built.
+#
+# The signature is a build-provenance attestation: anyone (Obsidian's review included) can check
+# that main.js, manifest.json and styles.css came out of this workflow, run on this repository, at
+# this tag -- not off a laptop. Releasing is just: bump the version, commit, push a tag "x.y.z".
+#
+# Every action is pinned to a full commit SHA rather than a tag, because a tag can be moved.
+name: Release
+
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: write      # create the release
+  id-token: write      # sign the attestation
+  attestations: write  # store it
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+      - name: The tag must match manifest.json, or Obsidian will not find the release
+        run: test "$(node -p "require('./manifest.json').version")" = "$GITHUB_REF_NAME"
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css \
+            --title "$GITHUB_REF_NAME" --generate-notes
+          sha256sum main.js manifest.json styles.css

@@ -9,3 +9,5 @@ export class Modal {
 		this.app = app;
 	}
 }
+// media.ts asks whether it is on the desktop before reaching for `fs`. Tests run under Node, which is.
+export const Platform = { isDesktop: true, isDesktopApp: true, isMobile: false };

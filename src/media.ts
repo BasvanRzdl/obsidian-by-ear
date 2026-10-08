@@ -1,3 +1,5 @@
+import { Platform } from "obsidian";
+
 /**
  * Getting bytes off disk.
  *
@@ -77,13 +79,17 @@ interface NodeFs {
 }
 
 export function nodeFs(): NodeFs | null {
-	const require = (window as unknown as { require?: (id: string) => unknown }).require;
-	if (typeof require !== "function") return null;
-	try {
-		return require("fs") as NodeFs;
-	} catch {
-		return null;
+	// The shape Obsidian's review linter recognises as a desktop guard: `require` inside the branch.
+	if (Platform.isDesktop) {
+		const require = (window as unknown as { require?: (id: string) => unknown }).require;
+		if (typeof require !== "function") return null;
+		try {
+			return require("fs") as NodeFs;
+		} catch {
+			return null;
+		}
 	}
+	return null;
 }
 
 export function folderExists(folder: string): boolean {
