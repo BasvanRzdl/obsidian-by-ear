@@ -100,7 +100,7 @@ export async function cacheSong(file: File): Promise<CachedSong> {
 	try {
 		const tx = db.transaction(STORE, "readwrite");
 		const store = tx.objectStore(STORE);
-		await run(store, store.put({ ...entry, data }) as IDBRequest<IDBValidKey>);
+		await run(store, store.put({ ...entry, data }));
 		return entry;
 	} finally {
 		db.close();
@@ -112,7 +112,7 @@ export async function forgetCached(name: string): Promise<void> {
 	try {
 		const tx = db.transaction(STORE, "readwrite");
 		const store = tx.objectStore(STORE);
-		await run(store, store.delete(name) as IDBRequest<undefined>);
+		await run(store, store.delete(name));
 	} finally {
 		db.close();
 	}
@@ -213,7 +213,7 @@ export function nudgeAudioSession(): void {
 	if (nudged) return;
 	nudged = true;
 	try {
-		const el = document.createElement("audio");
+		const el = createEl("audio");
 		el.src = silentWavUrl();
 		el.volume = 0.01;
 		void el.play().catch(() => undefined);

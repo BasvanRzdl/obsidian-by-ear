@@ -998,6 +998,7 @@
 }
 
 .by-ear-video {
+  transform: translate(var(--by-ear-tx, 0px), var(--by-ear-ty, 0px)) scale(var(--by-ear-scale, 1));
   transform-origin: center center;
   will-change: transform;
 }
@@ -1016,5 +1017,27 @@
 }
 
 .by-ear-field-hint.is-bad {
+  color: var(--text-error);
+}
+
+/* ------------------------------------------------------------------ volume, in the top bar */
+
+.by-ear-volume {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* On touch the Save button is hidden, so the volume is what has to take the slack. */
+.by-ear-player.is-mobile .by-ear-volume {
+  margin-left: auto;
+}
+
+.by-ear-volume input[type="range"] {
+  width: 96px;
+}
+
+.by-ear-player .by-ear-mute.is-active {
   color: var(--text-error);
 }

@@ -62,6 +62,9 @@ const TAP_RESET_MS = 2500;
  */
 const HEAVY_BYTES = 400e6;
 
+/** Per-device key for the volume slider. See `buildVolume`. */
+const VOLUME_KEY = "by-ear-volume";
+
 type TabId = "marks" | "notes" | "tune" | "loop";
 
 export class PlayerView extends ItemView {
@@ -128,6 +131,8 @@ export class PlayerView extends ItemView {
 		panes: {} as Record<TabId, HTMLElement>,
 		markList: null as HTMLElement | null,
 		callResponse: null as HTMLButtonElement | null,
+		volume: null as HTMLInputElement | null,
+		muteButton: null as HTMLButtonElement | null,
 		crState: null as HTMLElement | null,
 		channelRow: null as HTMLElement | null,
 		channelNote: null as HTMLElement | null,
@@ -234,7 +239,7 @@ export class PlayerView extends ItemView {
 		// Obsidian empties this element when the view goes, so it must be back where it belongs.
 		if (this.immersive) this.restoreFromBody();
 		await this.closeLedger();
-		if (this.raf) cancelAnimationFrame(this.raf);
+		if (this.raf) window.cancelAnimationFrame(this.raf);
 		this.raf = 0;
 		window.clearTimeout(this.statusTimer);
 		this.awake.destroy();
@@ -427,8 +432,57 @@ export class PlayerView extends ItemView {
 		// sits beside the notes box instead, which is where the doubt actually happens.
 		this.el.noteLink = bar.createSpan({ cls: "by-ear-note-link" });
 
+		this.buildVolume(bar);
 		this.button(bar, "Save", "Write the ledger to the note now (Cmd/Ctrl+S)", () => void this.saveLedger(), "by-ear-top-save");
 		this.el.fullscreen = this.button(bar, "⛶", "Full screen (f)", () => void this.toggleImmersive(), "by-ear-icon");
+	}
+
+	/**
+	 * Volume: a speaker that mutes, and a slider beside it.
+	 *
+	 * In the top bar rather than the rail, because the rail is full (spec §11a) and volume is set
+	 * once per sitting, not once per pass. The slider is dropped on a phone, which has volume
+	 * buttons on its side and no width to spare; the speaker stays as a mute.
+	 *
+	 * Remembered per device, not per song and not in the synced settings: the right level is a
+	 * fact about the speakers on the desk, and the Mac's level is wrong for the iPad's.
+	 */
+	private buildVolume(bar: HTMLElement): void {
+		const box = bar.createDiv({ cls: "by-ear-volume" });
+		this.el.muteButton = this.iconButton(box, "volume-2", "Mute / unmute (v)", () => this.toggleMute(), "by-ear-mute");
+		const slider = box.createEl("input", {
+			type: "range",
+			cls: "slider by-ear-wide-only",
+			attr: { min: "0", max: "100", step: "1", "aria-label": "Volume, percent" },
+		});
+		const saved: unknown = this.app.loadLocalStorage(VOLUME_KEY);
+		const level = saved === null || !Number.isFinite(Number(saved)) ? 100 : Number(saved);
+		slider.value = String(level);
+		this.engine.setVolume(level / 100);
+		slider.addEventListener("input", () => {
+			this.engine.setVolume(Number(slider.value) / 100);
+			// Moving the slider is a clear enough statement that he wants to hear it.
+			if (this.engine.isMuted) this.engine.setMuted(false);
+			this.app.saveLocalStorage(VOLUME_KEY, slider.value);
+			this.syncVolumeUi();
+		});
+		this.el.volume = slider;
+		this.syncVolumeUi();
+	}
+
+	private toggleMute(): void {
+		this.engine.setMuted(!this.engine.isMuted);
+		this.syncVolumeUi();
+	}
+
+	private syncVolumeUi(): void {
+		const button = this.el.muteButton;
+		if (!button) return;
+		const level = this.engine.volume;
+		const icon = this.engine.isMuted || level === 0 ? "volume-x" : level < 0.5 ? "volume-1" : "volume-2";
+		setIcon(button, icon);
+		button.toggleClass("is-active", this.engine.isMuted);
+		this.el.volume?.setAttr("title", `Volume ${Math.round(level * 100)}%`);
 	}
 
 	private openLibrary(): void {
@@ -669,6 +723,7 @@ export class PlayerView extends ItemView {
 			["A / B", "set loop start / end at the playhead"],
 			["L", "loop on / off"],
 			["C", "call & response on / off"],
+			["V", "mute / unmute"],
 			["X", "clear the loop"],
 			["[ ]", "nudge A by 10 ms  (shift: nudge B)"],
 			["↑ ↓", `tempo ± ${RATE_STEP}%`],
@@ -1703,6 +1758,10 @@ export class PlayerView extends ItemView {
 			case "C":
 				this.toggleCallResponse();
 				break;
+			case "v":
+			case "V":
+				this.toggleMute();
+				break;
 			case "x":
 			case "X":
 				this.engine.setLoop(null, null);
@@ -1740,7 +1799,7 @@ export class PlayerView extends ItemView {
 	// ------------------------------------------------------------------ frame loop
 
 	private frame = (): void => {
-		this.raf = requestAnimationFrame(this.frame);
+		this.raf = window.requestAnimationFrame(this.frame);
 		const playing = this.engine.transport.playing;
 		if (playing !== this.wasPlaying) {
 			this.wasPlaying = playing;
@@ -1783,9 +1842,9 @@ export class PlayerView extends ItemView {
 		this.captureTransport();
 		const { loopA, loopB, looping } = this.engine.transport;
 		const has = loopA !== null && loopB !== null;
-		this.el.edgeA?.setText(has ? formatTime(loopA as number) : "—");
-		this.el.edgeB?.setText(has ? formatTime(loopB as number) : "—");
-		this.el.loopLen?.setText(has ? `${((loopB as number) - (loopA as number)).toFixed(2)} s` : "no loop");
+		this.el.edgeA?.setText(has ? formatTime(loopA) : "—");
+		this.el.edgeB?.setText(has ? formatTime(loopB) : "—");
+		this.el.loopLen?.setText(has ? `${(loopB - loopA).toFixed(2)} s` : "no loop");
 		this.el.loopToggle?.toggleClass("is-on", looping);
 	}
 

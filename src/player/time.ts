@@ -83,7 +83,7 @@ export class TimeModal extends Modal {
 			nameInput = contentEl.createEl("input", {
 				type: "text",
 				cls: "by-ear-field",
-				attr: { value: this.options.name.value, placeholder: "name this mark", "aria-label": "Mark name" },
+				attr: { value: this.options.name.value, placeholder: "Name this mark", "aria-label": "Mark name" },
 			});
 		}
 

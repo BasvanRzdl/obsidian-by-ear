@@ -55,7 +55,7 @@ export class LibraryModal extends Modal {
 		const search = contentEl.createEl("input", {
 			type: "search",
 			cls: "by-ear-lib-filter",
-			attr: { placeholder: "filter — song, artist or band", "aria-label": "Filter songs" },
+			attr: { placeholder: "Filter: song, artist or band", "aria-label": "Filter songs" },
 		});
 		search.addEventListener("input", () => {
 			this.filter = search.value.trim().toLowerCase();

@@ -1,0 +1,66 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Shrikhand&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --night:#1a0630; --haze:#6a1fb5; --violet:#9b3cf0; --magenta:#e0218a;
+    --orange:#ff6a13; --gold:#ffc93c; --turq:#26d0c2; --cream:#fff4dc;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:1280px;height:640px;overflow:hidden;background:var(--night)}
+  .bg{position:absolute;inset:0;
+    background:
+      radial-gradient(ellipse 60% 80% at 82% 30%, rgba(255,106,19,.55), transparent 60%),
+      radial-gradient(ellipse 55% 70% at 70% 95%, rgba(224,33,138,.6), transparent 65%),
+      radial-gradient(ellipse 70% 90% at 5% 10%, rgba(155,60,240,.75), transparent 60%),
+      radial-gradient(ellipse 50% 60% at 30% 100%, rgba(38,208,194,.35), transparent 60%),
+      var(--night);}
+  svg.rings{position:absolute;inset:0}
+  .title{position:absolute;left:84px;top:118px;font-family:Shrikhand,serif;font-size:168px;line-height:1;
+    color:var(--gold);letter-spacing:2px;
+    text-shadow: 5px 5px 0 var(--orange), 10px 10px 0 var(--magenta), 15px 15px 0 var(--haze), 0 0 60px rgba(255,201,60,.35);
+    transform:rotate(-4deg);transform-origin:left bottom}
+  .tag{position:absolute;left:92px;top:360px;font-family:"Space Grotesk",sans-serif;font-weight:700;font-size:38px;
+    color:var(--cream);letter-spacing:.5px}
+  .tag b{color:var(--turq)}
+  .sub{position:absolute;left:92px;top:414px;font-family:"Space Grotesk",sans-serif;font-weight:500;font-size:23px;color:rgba(255,244,220,.78)}
+  .wave{position:absolute;left:0;right:0;bottom:0;height:150px}
+</style></head><body>
+<div class="bg"></div>
+<svg class="rings" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="g1" x1="0" x2="1"><stop offset="0" stop-color="#ffc93c"/><stop offset=".5" stop-color="#ff6a13"/><stop offset="1" stop-color="#e0218a"/></linearGradient>
+  </defs>
+  <g fill="none" stroke-width="10" opacity=".9" transform="translate(1040 250)">
+    <circle r="250" stroke="#6a1fb5" opacity=".55"/>
+    <circle r="205" stroke="#e0218a" opacity=".6"/>
+    <circle r="160" stroke="#ff6a13" opacity=".7"/>
+    <circle r="115" stroke="#ffc93c" opacity=".8"/>
+    <circle r="70"  stroke="#26d0c2" opacity=".9"/>
+    <circle r="26"  fill="#fff4dc" stroke="none"/>
+    <circle r="7"  fill="#1a0630" stroke="none"/>
+  </g>
+</svg>
+<div class="title">By Ear</div>
+<div class="tag">Loop it. Slow it. <b>Learn it by ear.</b></div>
+<div class="sub">A transcribing player for Obsidian · audio &amp; video · Mac, iPad, iPhone</div>
+<svg class="wave" viewBox="0 0 1280 150" preserveAspectRatio="none" id="wave"></svg>
+<script>
+  // A waveform with an A→B loop region, drawn rather than faked from a real song.
+  const svg=document.getElementById('wave'), N=200, W=1280, H=150, mid=92;
+  let seed=7; const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647};
+  const A=520,B=860;
+  svg.innerHTML += `<rect x="${A}" y="8" width="${B-A}" height="142" fill="rgba(38,208,194,.16)"/>
+    <line x1="${A}" x2="${A}" y1="4" y2="150" stroke="#26d0c2" stroke-width="3"/>
+    <line x1="${B}" x2="${B}" y1="4" y2="150" stroke="#26d0c2" stroke-width="3"/>
+    <text x="${A+8}" y="26" font-family="Space Grotesk" font-weight="700" font-size="18" fill="#26d0c2">A</text>
+    <text x="${B-22}" y="26" font-family="Space Grotesk" font-weight="700" font-size="18" fill="#26d0c2">B</text>`;
+  for(let i=0;i<N;i++){
+    const x=i*W/N+3, env=0.35+0.65*Math.abs(Math.sin(i/13))*(0.6+0.4*Math.sin(i/41));
+    const h=Math.max(4,env*60*(0.55+0.45*rnd()));
+    const inLoop=x>A&&x<B, col=inLoop?'#26d0c2':(x<A?'url(#wg)':'#ff6a13');
+    svg.innerHTML+=`<rect x="${x}" y="${mid-h}" width="3.4" height="${h*1.6}" rx="1.7" fill="${inLoop?'#26d0c2':'#ffc93c'}" opacity="${inLoop?1:.75}"/>`;
+  }
+  svg.innerHTML+=`<line x1="700" x2="700" y1="0" y2="150" stroke="#fff4dc" stroke-width="2.5"/>`;
+</script>
+</body></html>

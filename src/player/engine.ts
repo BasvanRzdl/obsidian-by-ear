@@ -103,9 +103,20 @@ export class Engine {
 	 * The output gain, and the only thing call & response touches.
 	 *
 	 * Everything the player does to the sound after the stretcher hangs off these two: the mixer
-	 * matrix, then this. `node -> splitter -> 4 gains -> merger -> master -> destination`.
+	 * matrix, then this. `node -> splitter -> 4 gains -> merger -> master -> volume -> destination`.
 	 */
 	private master: GainNode | null = null;
+	/**
+	 * The listener's volume, after everything else.
+	 *
+	 * Its own node rather than a factor folded into `master`, because the call & response gate
+	 * cancels and rewrites `master`'s schedule constantly -- a volume living there would be
+	 * overwritten on the next pass. Two nodes, two owners, no shared parameter.
+	 */
+	private volumeNode: GainNode | null = null;
+	/** 0..1 as the slider reads it. Kept so a node built later starts at the right level. */
+	private level = 1;
+	private muted = false;
 	/** The 2x2 mixer, indexed `[out * 2 + in]` to match `channelMatrix()`. */
 	private mix: GainNode[] = [];
 
@@ -310,6 +321,41 @@ export class Engine {
 		}
 	}
 
+	get volume(): number {
+		return this.level;
+	}
+
+	get isMuted(): boolean {
+		return this.muted;
+	}
+
+	/**
+	 * Volume, 0..1, as a fraction of the slider's travel.
+	 *
+	 * Squared on the way to the gain, because loudness is heard roughly logarithmically: a linear
+	 * gain puts all the useful range in the bottom fifth of the slider, and halfway sounds barely
+	 * quieter than full. Never above 1 -- a boost would clip, and the device has its own volume.
+	 *
+	 * Web Audio rather than `HTMLMediaElement.volume`, which iOS ignores entirely: on an iPad or an
+	 * iPhone this gain is the only in-app volume there can be.
+	 */
+	setVolume(level: number): void {
+		this.level = Math.min(1, Math.max(0, level));
+		this.applyVolume();
+	}
+
+	setMuted(muted: boolean): void {
+		this.muted = muted;
+		this.applyVolume();
+	}
+
+	private applyVolume(): void {
+		if (!this.ctx || !this.volumeNode) return;
+		const target = this.muted ? 0 : this.level * this.level;
+		// Ramped for the same reason as the mixer: a step on a running signal is a click.
+		this.volumeNode.gain.setTargetAtTime(target, this.ctx.currentTime, 0.01);
+	}
+
 	get callResponse(): boolean {
 		return this.cr;
 	}
@@ -378,6 +424,7 @@ export class Engine {
 	async destroy(): Promise<void> {
 		this.node = null;
 		this.master = null;
+		this.volumeNode = null;
 		this.mix = [];
 		// The only way to retire a leaked processor. Everything else in this file depends on it.
 		try {
@@ -536,7 +583,7 @@ export class Engine {
 		node.configure(ENGINE_CONFIG);
 
 		/*
-		 * node -> splitter -> four gains -> merger -> master -> destination.
+		 * node -> splitter -> four gains -> merger -> master -> volume -> destination.
 		 *
 		 * The four gains are a 2x2 matrix, which is enough for all five channel modes without the
 		 * graph ever changing shape: only its numbers move, and they move on ramps. `side` needs the
@@ -559,9 +606,12 @@ export class Engine {
 		}
 
 		this.master = ctx.createGain();
+		this.volumeNode = ctx.createGain();
+		this.volumeNode.gain.value = this.muted ? 0 : this.level * this.level;
 		node.connect(splitter);
 		merger.connect(this.master);
-		this.master.connect(ctx.destination);
+		this.master.connect(this.volumeNode);
+		this.volumeNode.connect(ctx.destination);
 		// A song opened with a mode already chosen should sound the way the button says it does.
 		this.setChannelMode(this.channelMode);
 

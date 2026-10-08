@@ -1,84 +1,88 @@
+![By Ear: loop it, slow it, learn it by ear](https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/main/assets/banner.png)
+
 # By Ear
 
-An Obsidian plugin for learning songs by ear: loop a passage, slow it down, shift its pitch in
-semitones **and cents**, watch the player's hands — and keep what you worked out in a note
-instead of locked inside an app.
+**A transcribing player for Obsidian.** Loop the hard bit, slow it down without changing the
+pitch, shift the pitch without changing the tempo, and watch the player's hands while you do it.
+On your Mac, your iPad and your phone. Everything you work out is saved in the song's own note.
 
-> **Status: Phase 5 — a working player on Mac, iPad and iPhone.** The waveform, transport, A→B
-> looping, tempo, pitch, the video, the song notes and the mobile file cache are all live and used
-> on real songs. Call & response and the channel mixer landed with this phase. What is left is the
-> rest of the loop features, the memory work for very long files, and a release pass. The Phase 0
-> spike that proved the engine viable is preserved at the `phase-0-spike` tag; the hazard notes it
-> produced are further down this file and are still load-bearing.
+Made by a guitarist who wanted one thing: to learn songs from the record, anywhere, for free.
+
+![Everything the ear needs. Nothing it doesn't.](https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/main/assets/features.png)
 
 ## Why
 
-Every good transcribing tool has the same hole in it. Transcribe! is excellent but desktop-only.
-Transcribe+ is excellent but needs an Apple M1 for its Mac build, so older Intel Macs are locked
-out permanently, and its features sit behind a subscription. The browser tools that are genuinely
-free can't show video. Nothing that runs everywhere is free, and nothing free runs everywhere.
+The good transcribing apps each leave a hole. Transcribe! is excellent but desktop-only.
+Transcribe+ needs an Apple Silicon Mac and a subscription. The free browser tools can't show
+video. Nothing free runs everywhere.
 
-And all of them store your progress the same way: loop points in a proprietary blob. But loop
-points are the cheap half. What actually costs a session to rebuild is the *understanding* — the
-roots, the tuning, the bar you still can't name. That belongs in text, on every device you own.
+And they all keep your progress locked in their own format. But the loop points are the cheap
+half. What costs a whole session to rebuild is the *understanding*: the tuning, the position, the
+bar you still can't name. That belongs in text, on every device you own.
 
-Obsidian already runs on all of them, and already syncs. So the player goes there.
+Obsidian already runs on all of them, and already syncs. So the player lives there.
 
-## What works today
+## What it does
 
-- Load audio **or a video** straight off disk on the desktop, or through the Files picker on
-  iPad and iPhone, where it is cached on the device
-- Waveform with zoom, click to seek, drag to set an A→B loop, nudge the edges by 10 ms
-- Tempo 25–150%, pitch-preserving
-- Pitch shift **independent of tempo**, in semitones *and* cents
-- The picture, slaved to the audio clock, so it can never drift from what you hear
-- Named marks and saved loops, written into the song's own note as plain markdown, along with
-  your findings and a dated log of sittings
-- **Call & response** — play the loop, then hear an equal silence to answer into
-- **Channel mixer** — left, right, mono, or side-only, which cancels whatever sits in the centre
-- Everything on the keyboard, so your hands stay near the guitar
-
-## What is still coming
-
-- Step-It-Up: loop at 60% and climb 5% a pass until you are at tempo
-- Loop pre-roll and tail padding, so you come in on time and nothing is clipped
-- Streaming very long files instead of holding them in memory
-- A release pass: community store submission
+- **Loop**: drag an A→B loop on the waveform, nudge its edges by 10 ms, drop named marks and jump
+  between them, loop mark to mark with one key
+- **Slow down**: tempo from 25% to 150% with the pitch kept, and one tap to swap between full speed
+  and your working tempo
+- **Shift pitch**: in semitones *and* cents, independent of tempo, for detuned records and
+  half-step-down bands
+- **Video**: open an mp4 and the picture is locked to the stretched audio, so it never drifts.
+  Pinch to zoom in on the fretboard on iPad and iPhone. Full screen, with the controls in reach
+- **Hear inside the mix**: left, right, mono, or side-only, which thins out whatever sits in the
+  centre (often the vocal and the bass)
+- **Call & response**: the loop plays, then leaves an equal silence for you to answer into
+- **Volume** and mute, remembered per device
+- **Your notes**: marks, saved loops, your findings and a dated log of sittings, written into the
+  song's note as plain markdown, below a marker, never touching what you wrote above it
+- **Keyboard first**, so your hands stay near the instrument
 
 ## What it will never do
 
-These are deliberate, and they are the point of the project rather than missing features:
+These are the point of the project, not missing features:
 
-- **No chord detection, key detection, or BPM detection.** A tool should assist the ear, not
-  answer for it. If it tells you the chord, it has deleted the part you were trying to learn.
-  Tapping your own beat grid is fine; being told is not.
+- **No chord, key or BPM detection.** A tool should assist the ear, not answer for it. If it tells
+  you the chord, it has deleted the part you were trying to learn.
 - **No streaks, no stats, no scoreboard.** The log records what you worked on, never a count.
-  Practice tools that gamify this make missing a day feel like a failure, which is how people
-  quit.
-- **No lyrics, and no bundled media.** Nothing copyrighted ships in this repo.
+- **No lyrics, no bundled media,** and no network access at all.
 
-## Platform support
+## Getting started
 
-| | |
-|---|---|
-| macOS (Intel and Apple Silicon) | **working** |
-| iPadOS / iOS | Phase 4 — the engine is proven there, the file path is not wired up yet. It is also the main reason this exists |
-| Windows / Linux | should work, untested |
-| **Android** | ⚠️ **probably not.** Obsidian audio plugins are reported not to work on Android because of WebView limitations. This is unverified by me and I have no Android device to test on. |
+1. Install **By Ear** from **Settings → Community plugins → Browse**, and enable it.
+2. **On a computer:** in the plugin's settings, set the **media folder**: where your songs live.
+   Keep it **outside your vault**. Songs are big, and Obsidian Sync caps files at 5 MB. On Apple
+   devices a folder in iCloud Drive is ideal, and the plugin offers one if it finds it.
+3. Click the 🎧 headphones icon in the ribbon (or run **By Ear: Open the player**), then click the
+   song name at the top to pick a song.
+4. **On iPad or iPhone:** tap the song name, then **Add songs…**, and pick files (or the whole
+   folder) from Files. They stay on the device until you remove them. Your notes sync as usual.
 
-## Installing it
+Plays mp3, m4a, wav, flac, aac, ogg, opus, aiff, mp4, m4v, mov and webm.
 
-```bash
-npm install
-./install.sh                       # or: ./install.sh "/path/to/your/vault"
+### Where your progress goes
+
+When you open a song, By Ear looks for its note: one with `media:` set to the file's name, or one
+whose title (or `song:` in frontmatter) matches the song. Name files `Artist - Title` and it will
+usually find the right one. If there is none, it creates a note in the **folder for new song
+notes** (default `By Ear/`). Press `⌘/Ctrl S` or **Save** to write it.
+
+Everything it writes sits below this line at the bottom of the note:
+
+```
+%% by-ear:ledger — written by the By Ear plugin. Everything above this line is yours. %%
 ```
 
-Then in Obsidian: **Settings → Community plugins → refresh**, enable **By Ear**, and set the
-**media folder** in its settings to wherever your songs live. Keep that folder *outside* the vault
-— Obsidian Sync caps files at 5 MB and songs are much bigger — and open the player from the
-headphones icon in the ribbon.
+Your chart, your lyrics, your essay above it are never touched.
 
-### Keyboard
+### Links into the player
+
+`obsidian://by-ear?song=Artist%20-%20Title.mp4&t=83` opens the player on that song at 1:23. Put
+one in a note to jump straight to the solo.
+
+## Keyboard
 
 | | |
 |---|---|
@@ -88,156 +92,75 @@ headphones icon in the ribbon.
 | `A` `B` | set the loop start / end at the playhead |
 | `L` / `X` | loop on-off / clear the loop |
 | `C` | call & response on / off |
+| `V` | mute / unmute |
 | `F` / `esc` | full screen, and back |
-| `⌘/ctrl S` | write the ledger to the note |
+| `⌘/Ctrl S` | write the ledger to the note |
 | `[` `]` | nudge A by 10 ms (shift: nudge B) |
 | `↑` `↓` | tempo ± 5% |
 | `-` `=` | pitch ± 1 semitone (shift: ± 10 cents) |
 | `0` | reset tempo and pitch |
-| wheel | zoom around the pointer (shift: pan) |
+| wheel | zoom the waveform around the pointer (shift: pan) |
 
-## What the spike settled
+## Getting songs: the optional `/by-ear` skill
 
-The Phase 0 spike lives at the `phase-0-spike` tag. It measured five things, on whatever device it
-was run on. Only the first three were planned; the last two were found the hard way, which is
-rather the point of a spike:
+By Ear plays files you already have. If you use [Claude Code](https://claude.com/claude-code),
+this repo also ships a skill that fetches them for you:
 
-1. **Does an AudioWorklet carrying inlined WASM boot inside Obsidian's WebView?** The engine
-   builds its worklet from a `blob:` URL, which a strict content-security policy could block.
-   ✅ **Answered: yes, on desktop and on iPadOS.** This was the one that could have ended the
-   project, and it doesn't.
-2. **Does `<input type="file">` reach the iOS Files picker?** On iPad that is the only route to
-   iCloud Drive, so if it fails there is no mobile story at all. ✅ **Answered: yes.**
-3. **Does `decodeAudioData` accept an `.mp4` directly**, or is an extracted audio sidecar
-   genuinely required for video? ✅ **Answered: it takes the video container straight**, on iPadOS,
-   including a 403 s file. Note what that costs though: decoded to float samples it was **155 MB
-   resident**, so caching, not decoding, is the real mobile problem.
-4. **Can a node be re-tuned while it is playing?** Every pitch drag and tempo nudge is a
-   `schedule()` on a node already making sound. If not, parameters could be set once and never
-   changed, which is not a player. ✅ **Answered: yes** — four ways out of four on iPadOS (50 ms
-   ahead, 300 ms ahead, an explicit `outputTime`, and `stop()`/`start()`), landing within 6 cents
-   of a requested octave every time.
-5. **Which `numberOfInputs` does this engine need?** ✅ **Answered: 1**, even though nothing is ever
-   connected to that input. Obsidian agrees with the browser after all — the run that seemed to say
-   otherwise was hitting the build hazard below. See the second hazard note for the mechanism. The
-   spike no longer probes: a probe could only detect a *boot* failure, and zero inputs boots
-   perfectly and then plays silence.
-
-### ⚠️ The configuration, for anyone else using Signalsmith Stretch
-
-```js
-stretch.configure({ blockMs: 200, intervalMs: 25, splitComputation: true });
+```
+/by-ear Jimi Hendrix - Little Wing
+/by-ear the live version of Red House
+/by-ear https://www.youtube.com/watch?v=...
 ```
 
-Those three numbers were arrived at by measurement, not taste, and the library's defaults are not
-close to them.
+It searches YouTube, picks the right upload, and saves it to your media folder. It keeps the
+video when there are hands to watch, and only the mp3 when the picture is a still album cover.
+It lives in [`skill/by-ear/`](skill/by-ear/) and needs `yt-dlp`, `ffmpeg` and `deno`.
 
-**`intervalMs` is the quality knob.** It defaults to `blockMs * 0.25`, which is far too coarse.
-Feeding the engine one pure 440 Hz sine and measuring what came back, against a 0.001% bypass
-floor: the default read **0.272%** THD+N on an Intel Mac and **0.445%** on an iPad. Dropping the
-interval to 25 ms alone is **6.6× cleaner at zero latency cost**; adding the 200 ms block buys
-another 1.8× for 80 ms. A pitch error of about +5 cents that looked like a separate defect turned
-out to be the same misconfiguration — it falls to +0.42 cents with the same change, because the hop
-was too coarse to resynthesise the phase correctly.
+**The easy way:** paste [this setup prompt](docs/setup-prompt.md) into Claude Code. It installs
+the plugin, the tools and the skill, sets your song folder, fetches a first song, and gives you a
+short tour of the player.
 
-**`splitComputation` is the dropout knob, and no preset can reach it.** Without it the whole
-block's FFT is computed inside a single 128-frame render quantum — a 2.9 ms budget at 44.1 kHz. A
-desktop i5 finishes in time; the iPad's WebView does not, the device is handed nothing, and that
-gap is an audible crackle. The library only reads the flag on the `blockMs` branch, so the default
-configuration is spiky by construction. Cost of switching it on: 25 ms of latency.
+It runs on a computer only: there is no dependable way to run yt-dlp on iOS. Downloading from
+YouTube is against YouTube's terms of service. The skill is for personal practice material on
+your own machine, and that call is yours.
 
-And **never `preset: 'cheaper'`** — it measured 10× worse than the default.
+## Platforms
 
-### ⚠️ The leaked-processor hazard, for anyone building nodes at runtime
+| | |
+|---|---|
+| macOS (Intel and Apple Silicon) | ✅ used daily |
+| iPadOS | ✅ used daily |
+| iOS | ✅ works. A phone screen is tight for this; landscape helps |
+| Windows / Linux | should work, untested. Reports welcome |
+| Android | ⚠️ unknown. Obsidian audio plugins are reported not to work there |
 
-`process()` returns `true` unconditionally, which sets the processor's active-source flag. The spec
-then requires the browser to retain the node **and keep calling it with no inputs connected**
-([web-audio-api#2658](https://github.com/WebAudio/web-audio-api/issues/2658), open, reproduced in
-Chrome and Firefox). `disconnect()` does not stop it. Dropping the reference does not stop it.
-`schedule({active: false})` does not stop it either — the inactive branch still calls `_process()`.
-**Only closing the `AudioContext` does.**
+## Privacy and disclosures
 
-So build **one node for the life of a session** and re-`configure()`/`re-schedule()` it, rather
-than building one per parameter change. Left alone this degrades a long session silently, and it is
-why an audible fault looked random for an evening: the same code sounded clean on one run and
-crackled on the next, because every button press left another processor running.
+- **No network access.** Nothing is sent anywhere, and there is no telemetry.
+- **Reads files outside your vault** on desktop: only the media folder you choose in settings,
+  and only to play them.
+- **On iPad and iPhone**, songs you add are cached in the app's storage on that device, and can
+  be removed from the song list.
+- **Writes to your vault** only when you save: the song's note, below the marker shown above.
 
-### ⚠️ The silent-processor hazard, for anyone driving this engine
+## Building from source
 
-Declare **`numberOfInputs: 1`**. The library's own default is 1; overriding it to 0 because you are
-feeding the node from buffers rather than a live input is a trap. Its worklet does this
-(`SignalsmithStretch.mjs:266`):
-
-```js
-let inputs = inputList[0];
-if (!currentMapSegment.active) {
-  outputList[0].forEach((_, c) => {
-    let channelBuffer = inputs[c%inputs.length];   // reads .length unconditionally
+```bash
+npm install
+npm run build
+npm test
+./install.sh "/path/to/your/vault"
 ```
 
-A fresh node starts on a default time-map segment with `active: false`, so that branch runs on
-every render quantum between `connect()` and the moment your scheduled segment takes effect. With
-zero declared inputs the browser passes `inputList === []`, so `inputs` is `undefined` and the line
-throws a `TypeError` on the audio thread. The processor is retired permanently — and it looks
-alive: the node still exists, its message port still answers, `latency()` returns a plausible
-number, and the output is silence forever. With one input and nothing connected, `inputs` is `[]`,
-`inputs[c % 0]` is `undefined`, and the assignment is dead code in that branch. Harmless.
-
-The general lesson, which cost more than the bug: **an AudioWorklet that has died is
-indistinguishable from one that is working on a silent file, unless you measure the output.**
-`processorerror` did not fire once during any of this. Every test here now reads peak amplitude.
-
-### ⚠️ The build hazard, for anyone bundling this engine
-
-Signalsmith Stretch has no separate worklet file. It builds one at runtime by stringifying its own
-functions, and the template hard-codes the identifier `_scriptName` as *text* while the factory
-that reads it is real code. **Any bundler transform that renames identifiers breaks the pair
-silently** — minification rewrote the declaration and left the string, so the worklet reached for a
-closure variable that does not exist on the audio thread.
-
-It fails in the worst possible way. Module evaluation only *defines* the factory, so `addModule()`
-resolves; the node constructs fine on the main thread; the `ReferenceError` fires on the audio
-thread inside the processor constructor; and a processor that throws never posts its `ready`
-message — so the boot promise never settles **and never rejects**. No error, no log line, no
-timeout. Just silence.
-
-Hence `minify: false` and `target: "es2022"` in `esbuild.config.mjs`, both load-bearing and both
-guarded by a post-build assertion. The durable fix is to stop depending on
-`Function.prototype.toString()` and ship the worklet as its own file.
-
-### Test A measures, and it also measures itself
-
-Test A is not a listening test. It plays 440 Hz through the stretcher shifted down 37 cents and
-reports what came out, which is what proves fractional semitones behave as cents rather than being
-rounded to whole ones — the one result the whole pitch control depends on.
-
-It takes three readings, because a single number cannot say *whose* fault it is:
-
-1. **bypass** — the tone straight to the analyser, no engine in the path. Our tone, our ruler,
-   nothing else. It should read 440.000, and if it doesn't the test aborts rather than blame the
-   engine for its own error.
-2. **engine at 0 semitones** — any gap from the bypass is the engine, with the measurement ruled
-   out.
-3. **engine at −37 cents** — read against 2, so whatever the engine does at rest cancels out.
-
-Each reading is the median of three, and the spread between them is printed: a tight spread that
-sits in the wrong place is a steady error, a wide one is resynthesis that never settles, and those
-are different bugs.
-
-A note on the ruler, because the obvious version of it is a trap in the other direction. Finding a
-frequency by taking the loudest FFT bin and interpolating a parabola through its neighbours *looks*
-far too coarse to answer a question posed in cents — bins here are 1.35 Hz apart, about 5 cents at
-this pitch. Simulated against the exact tones this test plays, it is accurate to **0.02 cents**. It
-was blamed for a 4-cent error it could not have caused. The DFT search used now is exact and
-robust to messier signals, but the lesson is the general one: check whether your instrument is
-actually the problem before rebuilding it.
+⚠️ `minify: false` in `esbuild.config.mjs` is load-bearing, and so is `numberOfInputs: 1` in the
+engine. Why, and the rest of what building on Signalsmith Stretch inside Obsidian taught me, is
+in [docs/ENGINEERING.md](docs/ENGINEERING.md).
 
 ## Built on
 
 [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) (MIT) for
-independent time-stretching and pitch-shifting. `rubberband-web` sounds better but is GPL, which
-would be incompatible with releasing this under MIT.
+time-stretching and pitch-shifting.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

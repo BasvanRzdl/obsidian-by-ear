@@ -164,7 +164,13 @@ export class VideoScreen {
 		const slackY = (box.height * (this.scale - 1)) / 2;
 		this.tx = clamp(this.tx, -slackX, slackX);
 		this.ty = clamp(this.ty, -slackY, slackY);
-		this.el.style.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.scale})`;
+		// CSS variables rather than an inline transform: the stylesheet owns the rule, the code only
+		// moves the numbers -- which is also what Obsidian's plugin review asks for.
+		this.el.setCssProps({
+			"--by-ear-tx": `${this.tx}px`,
+			"--by-ear-ty": `${this.ty}px`,
+			"--by-ear-scale": String(this.scale),
+		});
 		this.host.toggleClass("is-zoomed", this.scale > 1.001);
 	}
 
@@ -173,7 +179,7 @@ export class VideoScreen {
 		this.scale = 1;
 		this.tx = 0;
 		this.ty = 0;
-		this.el.style.transform = "";
+		this.el.setCssProps({ "--by-ear-tx": "0px", "--by-ear-ty": "0px", "--by-ear-scale": "1" });
 		this.host.removeClass("is-zoomed");
 	}
 
