@@ -10,6 +10,14 @@ Made by a guitarist who wanted one thing: to learn songs from the record, anywhe
 
 ![Everything the ear needs. Nothing it doesn't.](https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/main/assets/features.png)
 
+![The player in full screen: a video slaved to the slowed-down audio, an A→B loop on the waveform and a named mark](https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/main/assets/shots/player.png)
+
+| Rename or re-time a mark | Pitch in semitones and cents | Call & response, channel mixer |
+|---|---|---|
+| ![Renaming a mark](https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/main/assets/shots/rename-mark.png) | ![The Tune tab](https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/main/assets/shots/tune.png) | ![The Loop tab](https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/main/assets/shots/loop.png) |
+
+<sub>Screenshots taken on a Mac in full screen. The video is blurred here only because it is someone else's footage.</sub>
+
 ## Why
 
 The good transcribing apps each leave a hole. Transcribe! is excellent but desktop-only.
