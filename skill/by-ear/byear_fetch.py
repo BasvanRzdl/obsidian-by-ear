@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 CONFIG = Path.home() / ".config" / "by-ear" / "config.json"
 FALLBACK_DEST = Path.home() / "Music" / "By Ear"
@@ -64,6 +65,25 @@ def default_dest():
         except (OSError, ValueError):
             pass
     return FALLBACK_DEST
+
+
+def checked_url(url, youtube_only=False):
+    """Refuse anything that is not a plain web link before it reaches yt-dlp.
+
+    yt-dlp reads an argument that starts with "-" as an option, and some of its options run shell
+    commands (--exec). Every URL is also passed after "--", but a URL that is not a URL never gets
+    that far. youtube_only is for links read out of a file's own metadata, which anyone who made
+    the file could have written.
+    """
+    u = urlparse(url or "")
+    if u.scheme not in ("http", "https") or not u.netloc:
+        if youtube_only:
+            return None
+        sys.exit(f"Not a web link: {url!r}")
+    host = u.hostname or ""
+    if youtube_only and not (host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")):
+        return None
+    return url
 
 
 def need(tool):
@@ -105,7 +125,7 @@ def search(query, browser, n=6):
 
 
 def metadata(url, browser):
-    r = ytdlp(["--dump-single-json", url], browser)
+    r = ytdlp(["--dump-single-json", "--", url], browser)
     if r.returncode != 0:
         err = r.stderr.strip()
         hint = ""
@@ -122,6 +142,7 @@ def metadata(url, browser):
 
 
 def safe_name(s):
+    s = re.sub(r"[\x00-\x1f\x7f]", " ", s)
     s = re.sub(r"[/\\:*?\"<>|]", "-", s)
     s = re.sub(r"\s+", " ", s).strip().strip(". ")
     return s[:120] or "untitled"
@@ -145,15 +166,16 @@ def frozen_fraction(path):
 
 def fetch(url, dest, name, want_video, browser, strict=True):
     dest.mkdir(parents=True, exist_ok=True)
-    out = str(dest / (name + ".%(ext)s"))
+    # "%" doubled: the -o value is a yt-dlp template, so a name holding "%(...)s" would expand.
+    out = str(dest / (name.replace("%", "%%") + ".%(ext)s"))
     # --force-overwrites is load-bearing: without it yt-dlp skips a file that already exists and
     # reports success, so re-fetching a bad copy silently keeps it.
     if want_video:
         args = ["-f", VIDEO_FORMAT, "--merge-output-format", "mp4", "--force-overwrites",
-                "--embed-metadata", "-o", out, url]
+                "--embed-metadata", "-o", out, "--", url]
     else:
         args = ["-f", "ba/b", "-x", "--audio-format", "mp3", "--audio-quality", "0",
-                "--force-overwrites", "--embed-metadata", "--embed-thumbnail", "-o", out, url]
+                "--force-overwrites", "--embed-metadata", "--embed-thumbnail", "-o", out, "--", url]
 
     for i, client in enumerate(CLIENTS):
         if i:
@@ -235,6 +257,9 @@ def audit(dest, refetch, browser):
         return
     for f in bad:
         url = embedded_url(f)
+        if url and not checked_url(url, youtube_only=True):
+            print(f"\n  skip  {f.stem} -- its stored link is not a YouTube link: {url[:80]}")
+            continue
         if not url:
             print(f"\n  skip  {f.stem} -- no source link in the file")
             continue
@@ -289,6 +314,7 @@ def main():
     need("yt-dlp")
     need("ffmpeg")
 
+    checked_url(args.url)
     meta = metadata(args.url, args.browser)
     name = safe_name(args.name or (
         f"{meta['uploader']} - {meta['title']}" if meta["uploader"] else meta["title"]))

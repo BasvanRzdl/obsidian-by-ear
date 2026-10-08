@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { applyLedger, splitAtMarker, parseBelow, LEDGER_MARKER, sittingLine, emptyLedger } from "./ledger.bundle.mjs";
+import { applyLedger, splitAtMarker, parseBelow, LEDGER_MARKER, sittingLine, emptyLedger, vaultSafe } from "./ledger.bundle.mjs";
 
 const chart = fs.readFileSync(new URL("./fixture-chart.md", import.meta.url), "utf8");
 let passed = 0;
@@ -65,6 +65,16 @@ check("a sitting line is facts only — no count, no judgement", () => {
   const line = sittingLine(24.6, 0.85, -1);
   assert.match(line, /^\d{4}-\d{2}-\d{2} · 25 min · 85% · -1 st$/);
   assert.equal(sittingLine(5, 1, 0).split(" · ").length, 2, "defaults are not mentioned");
+});
+
+check("a file name cannot inject frontmatter or escape the folder", () => {
+  // A song's file name ends up as a note name. It comes from a download or a friend's file, so
+  // it gets the same suspicion as any outside input.
+  assert.equal(vaultSafe("Song\ntype: evil\ncssclasses: x"), "Song type- evil cssclasses- x");
+  assert.equal(vaultSafe("../../.obsidian/plugins"), "-..-.obsidian-plugins", "one name, no separators");
+  assert.equal(vaultSafe("..hidden"), "hidden");
+  assert.equal(vaultSafe("Remix: [[Link]] #tag ^block | a*b?"), "Remix- --Link-- -tag -block - a-b-");
+  assert.equal(vaultSafe("Little Wing — Jimi Hendrix"), "Little Wing — Jimi Hendrix", "ordinary names are untouched");
 });
 
 console.log(`\n${passed} checks passed`);

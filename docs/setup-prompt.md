@@ -28,8 +28,11 @@ and don't move on until a step has worked.
      https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugins.json.
      If it is: tell me to install it via Settings > Community plugins > Browse > "By Ear".
    - If not: download main.js, manifest.json and styles.css from
-     https://github.com/BasvanRzdl/obsidian-by-ear/releases/latest/download/<file>
+     https://github.com/BasvanRzdl/obsidian-by-ear/releases/download/1.0.1/<file>
      into <vault>/.obsidian/plugins/by-ear/.
+   - Either way, check the three files against the SHA-256 list at the bottom of this message.
+     If the store gave me a newer version than 1.0.1, the hashes will differ: tell me that and
+     continue. If the version IS 1.0.1 and a hash differs, stop and tell me; don't enable it.
    - Either way, write <vault>/.obsidian/plugins/by-ear/data.json as
      {"mediaFolder": "<the song folder, absolute path>", "noteFolder": "By Ear"}
      (merge with the file if it already exists).
@@ -47,8 +50,10 @@ and don't move on until a step has worked.
 
 4. INSTALL THE /by-ear SKILL
    - Download SKILL.md and byear_fetch.py from
-     https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/main/skill/by-ear/<file>
-     into ~/.claude/skills/by-ear/ .
+     https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/1.0.1/skill/by-ear/<file>
+     into ~/.claude/skills/by-ear/ , and check both against the SHA-256 list below. If either
+     differs, delete it, stop, and tell me. Read byear_fetch.py before running it and tell me in
+     two lines what it does.
    - Write ~/.config/by-ear/config.json as {"dest": "<the song folder>"}.
    - Ask me for a song I actually want to learn, then fetch it by following SKILL.md, as a test.
      Tell me /by-ear will be available in my next Claude Code session, from any folder.
@@ -80,4 +85,15 @@ and don't move on until a step has worked.
 Ground rules: By Ear deliberately never detects chords, keys or BPM and keeps no streaks or
 stats. Don't offer me chords or tabs unless I ask. If anything fails, show me the actual error and
 fix it before going on. Finish with a five-line cheat sheet of the keys I'll use most.
+
+SHA-256 (version 1.0.1):
+aeac421b47c9b46e73e8cb039377fa28eb8e93bb709f1ef4a1525cf6f5fb7808  main.js
+215204e31d28ff7560ffd0204fb451ee4eaccf09f0dbd80fbe22d9a8dff16301  manifest.json
+dac178af446a23474202c547582567c613f52fa45a6cfb08f24c907d46109bbd  styles.css
+1c8cc8c5738c90f1c245cd6022fc3d9677c64f632aed871fc356f826c4e65e4d  SKILL.md
+6a381a3024695cb4d4fbbf1dec9d9278c73218eabab05ed838286531d035e399  byear_fetch.py
 ````
+
+The checksums are in the prompt on purpose: if the prompt reached you from the author directly,
+they prove the files you download are the files he published, even if the repository were ever
+changed afterwards. Each release updates them.

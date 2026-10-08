@@ -193,10 +193,23 @@ function asMatch(entry: IndexEntry, how: NoteMatch["how"]): NoteMatch {
 	return { file: entry.file, how, artist: entry.artistRaw, bands: entry.bands };
 }
 
+/**
+ * A file name is not a safe vault name: it can hold characters Obsidian links and sync refuse
+ * (`[ ] # ^ | \ : * ? " < > /`) and, on macOS, even line breaks. Everything outside that set is kept.
+ */
+export function vaultSafe(value: string): string {
+	return value
+		.replace(/[\u0000-\u001f\u007f]/g, " ")
+		.replace(/[[\]#^|\\/:*?"<>]/g, "-")
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/^\.+/, "");
+}
+
 /** Creates the fallback note, used only when a song has neither a chart nor a study. */
 export async function createNote(app: App, folder: string, mediaName: string): Promise<TFile> {
 	const { song, artist } = splitMediaName(mediaName);
-	const base = artist ? `${song} — ${artist}` : song;
+	const base = vaultSafe(artist ? `${song} — ${artist}` : song) || "Untitled song";
 	const dir = normalizePath(folder);
 	if (dir && !app.vault.getAbstractFileByPath(dir)) {
 		await app.vault.createFolder(dir).catch(() => undefined);
@@ -209,23 +222,22 @@ export async function createNote(app: App, folder: string, mediaName: string): P
 		n++;
 	}
 
+	const file = await app.vault.create(path, `# ${base}\n\n${LEDGER_MARKER}\n`);
+	// ⚠️ Through Obsidian's YAML writer, never by pasting strings into "---" lines. The values come
+	// from a file name, which the user does not fully control (a download, a file from a friend):
+	// a name holding ": " breaks hand-built YAML, and one holding a line break injects keys.
+	//
 	// `bands` is spelled the way a Songbook chart spells it, on purpose -- the join-key rule from
 	// the design note's section 6. It is what lets a dashboard be a query later, not a migration.
-	const front = [
-		"---",
-		"type: byear",
-		`song: ${song}`,
-		`artist: ${artist}`,
-		"bands: []",
-		`media: ${mediaName}`,
-		"status: working",
-		"---",
-		"",
-		`# ${base}`,
-		"",
-	].join("\n");
-
-	return app.vault.create(path, front + "\n" + LEDGER_MARKER + "\n");
+	await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+		fm.type = "byear";
+		fm.song = song;
+		fm.artist = artist;
+		fm.bands = [];
+		fm.media = mediaName;
+		fm.status = "working";
+	});
+	return file;
 }
 
 // --------------------------------------------------------------------- reading
@@ -389,8 +401,8 @@ function renderLedger(ledger: Ledger): string {
 export function applyLedger(content: string, ledger: Ledger): string {
 	const { above } = splitAtMarker(content);
 	const head = content.includes(LEDGER_MARKER)
-		? above.replace(/\s+$/, "") + "\n\n"
-		: content.replace(/\s+$/, "") + "\n\n---\n\n";
+		? above.trimEnd() + "\n\n"
+		: content.trimEnd() + "\n\n---\n\n";
 	return head + LEDGER_MARKER + renderLedger(ledger);
 }
 

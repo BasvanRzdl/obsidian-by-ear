@@ -141,7 +141,12 @@ your own machine, and that call is yours.
   and only to play them.
 - **On iPad and iPhone**, songs you add are cached in the app's storage on that device, and can
   be removed from the song list.
-- **Writes to your vault** only when you save: the song's note, below the marker shown above.
+- **Writes to your vault** in two moments. When you **open a song**, it links it to its note: it
+  adds a `media:` line to that note's frontmatter, or creates a short note if there is none.
+  When you **save**, it writes below the marker shown above. It never edits anything else.
+- **`obsidian://by-ear` links** can open the player on a song that is already in your media folder,
+  so opening one can do the linking above. They cannot reach any other file, start playback, or
+  run anything.
 
 ## Building from source
 
