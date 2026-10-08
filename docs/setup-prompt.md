@@ -28,11 +28,11 @@ and don't move on until a step has worked.
      https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/community-plugins.json.
      If it is: tell me to install it via Settings > Community plugins > Browse > "By Ear".
    - If not: download main.js, manifest.json and styles.css from
-     https://github.com/BasvanRzdl/obsidian-by-ear/releases/download/1.0.3/<file>
+     https://github.com/BasvanRzdl/obsidian-by-ear/releases/download/1.0.4/<file>
      into <vault>/.obsidian/plugins/by-ear/.
    - Either way, check the three files against the SHA-256 list at the bottom of this message.
-     If the store gave me a newer version than 1.0.3, the hashes will differ: tell me that and
-     continue. If the version IS 1.0.3 and a hash differs, stop and tell me; don't enable it.
+     If the store gave me a newer version than 1.0.4, the hashes will differ: tell me that and
+     continue. If the version IS 1.0.4 and a hash differs, stop and tell me; don't enable it.
    - Either way, write <vault>/.obsidian/plugins/by-ear/data.json as
      {"mediaFolder": "<the song folder, absolute path>", "noteFolder": "By Ear"}
      (merge with the file if it already exists).
@@ -50,7 +50,7 @@ and don't move on until a step has worked.
 
 4. INSTALL THE /by-ear SKILL
    - Download SKILL.md and byear_fetch.py from
-     https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/1.0.3/skill/by-ear/<file>
+     https://raw.githubusercontent.com/BasvanRzdl/obsidian-by-ear/1.0.4/skill/by-ear/<file>
      into ~/.claude/skills/by-ear/ , and check both against the SHA-256 list below. If either
      differs, delete it, stop, and tell me. Read byear_fetch.py before running it and tell me in
      two lines what it does.
@@ -82,7 +82,7 @@ and don't move on until a step has worked.
      Sync with "Installed community plugins" switched on, it arrives by itself. Otherwise: if By Ear
      is in the community store (step 2), install it from Browse on the device. If it is not listed
      yet, install "BRAT" from Browse on the device, then in BRAT choose "Add beta plugin" and enter
-     BasvanRzdl/obsidian-by-ear (version 1.0.3). Once By Ear is in the store, normal updates take over.
+     BasvanRzdl/obsidian-by-ear (version 1.0.4). Once By Ear is in the store, normal updates take over.
      Songs come in through the song name > "Add songs…" > Files. They stay cached on the device.
      Downloading only works on a computer.
 
@@ -90,10 +90,10 @@ Ground rules: By Ear deliberately never detects chords, keys or BPM and keeps no
 stats. Don't offer me chords or tabs unless I ask. If anything fails, show me the actual error and
 fix it before going on. Finish with a five-line cheat sheet of the keys I'll use most.
 
-SHA-256 (version 1.0.3):
-327889036c602e25d0e173c1b3a2cc3b3a37b40623ed4e54fff27a9ad0e4e23b  main.js
-3f11ed6aad605b794eeffbbd5cec4c43192b52682169d22a0107ccaee5e7d3f9  manifest.json
-dac178af446a23474202c547582567c613f52fa45a6cfb08f24c907d46109bbd  styles.css
+SHA-256 (version 1.0.4):
+c7726ec9ad3fa947a9b2aec6e09877359d389a7f670e91821c44fd5ead498ef1  main.js
+d23a3f674ef51950ee55c04a4fe3ab2617102bd8b2472eeba25bcdf9526006f8  manifest.json
+503621951d5d2b73941497946732f1a6e7d3cf1b8a00a1de1a115aac5d83508e  styles.css
 1c8cc8c5738c90f1c245cd6022fc3d9677c64f632aed871fc356f826c4e65e4d  SKILL.md
 6a381a3024695cb4d4fbbf1dec9d9278c73218eabab05ed838286531d035e399  byear_fetch.py
 ````
