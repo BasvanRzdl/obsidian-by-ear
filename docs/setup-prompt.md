@@ -78,8 +78,11 @@ and don't move on until a step has worked.
      (a `media:` line in the frontmatter) or creates a short one. Nothing else is ever edited.
    - Getting songs: "/by-ear Artist - Title" in Claude Code, or "/by-ear the live version of ...",
      or a YouTube link.
-   - iPad/iPhone (if I said yes): install By Ear on the device too (the plugin folder syncs if I
-     use Obsidian Sync with community plugins enabled, otherwise install it from Browse there).
+   - iPad/iPhone (if I said yes): By Ear has to be installed on the device too. If I use Obsidian
+     Sync with "Installed community plugins" switched on, it arrives by itself. Otherwise: if By Ear
+     is in the community store (step 2), install it from Browse on the device. If it is not listed
+     yet, install "BRAT" from Browse on the device, then in BRAT choose "Add beta plugin" and enter
+     BasvanRzdl/obsidian-by-ear (version 1.0.3). Once By Ear is in the store, normal updates take over.
      Songs come in through the song name > "Add songs…" > Files. They stay cached on the device.
      Downloading only works on a computer.
 
