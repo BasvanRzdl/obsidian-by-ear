@@ -1,4 +1,4 @@
-import { ItemView, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Modal, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
 import type ByEarPlugin from "../main";
 import { Engine } from "./engine";
 import { Waveform } from "./waveform";
@@ -89,6 +89,13 @@ export class PlayerView extends ItemView {
 	private immersive = false;
 	/** Whether *we* took native full screen, as opposed to only drawing the overlay. */
 	private native = false;
+	/**
+	 * Whether native full screen was granted when the user asked for it -- and so whether to take it
+	 * back after something (a dialogue, the iPad keyboard) forced it away. See `holdOverlay`.
+	 */
+	private wantNative = false;
+	/** Dialogues this view has open. See `present`. */
+	private dialogs = 0;
 	private home: { parent: HTMLElement | null; next: ChildNode | null } | null = null;
 	/** Whether the ledger holds anything not yet on disk. Drives the receipt, nothing else. */
 	private unsaved = false;
@@ -213,13 +220,19 @@ export class PlayerView extends ItemView {
 		// inside a normal pane after a swipe out.
 		this.registerDomEvent(document, "fullscreenchange", () => {
 			if (!document.fullscreenElement && this.immersive && this.native) {
-				this.immersive = false;
 				this.native = false;
+				// Lost to a dialogue or the keyboard, not left on purpose: keep covering the screen.
+				if (this.holdOverlay()) return;
+				this.immersive = false;
+				this.wantNative = false;
 				this.restoreFromBody();
 				this.wakeChrome();
 				this.relayout();
 			}
 		});
+		// Taking native full screen back needs a user gesture, and a tap is one. Anywhere will do --
+		// the first tap after the keyboard goes away restores what the keyboard took.
+		this.registerDomEvent(root, "pointerup", () => this.resumeNative());
 		// Rotating a phone or dragging a pane divider changes which shape fits.
 		this.registerDomEvent(window, "resize", () => this.relayout());
 		if (typeof ResizeObserver !== "undefined") {
@@ -259,7 +272,7 @@ export class PlayerView extends ItemView {
 			this.library.find((e) => e.name.toLowerCase() === wanted) ??
 			this.library.find((e) => e.name.toLowerCase().includes(wanted));
 		if (!entry) {
-			new Notice(`By Ear: no file matching “${name}” in the media folder.`);
+			this.notify(`By Ear: no file matching “${name}” in the media folder.`);
 			return;
 		}
 		if (this.current?.path !== entry.path) await this.openSong(entry);
@@ -283,7 +296,7 @@ export class PlayerView extends ItemView {
 				}));
 			} catch (error) {
 				this.library = [];
-				new Notice(`By Ear could not open its song cache: ${message(error)}`);
+				this.notify(`By Ear could not open its song cache: ${message(error)}`);
 			}
 		} else {
 			const folder = this.plugin.settings.mediaFolder;
@@ -317,7 +330,7 @@ export class PlayerView extends ItemView {
 
 		await this.refreshLibrary();
 		if (failed.length > 0) {
-			new Notice(`By Ear could not keep ${failed.length} of ${files.length}:\n${failed.join("\n")}`);
+			this.notify(`By Ear could not keep ${failed.length} of ${files.length}:\n${failed.join("\n")}`);
 		}
 		this.setStatus(
 			`${added.length} song${added.length === 1 ? "" : "s"} on this device` +
@@ -486,7 +499,7 @@ export class PlayerView extends ItemView {
 	}
 
 	private openLibrary(): void {
-		new LibraryModal(this.app, {
+		this.present(new LibraryModal(this.app, {
 			entries: this.library,
 			haystack: (e) => this.haystack(e),
 			current: this.current,
@@ -498,7 +511,7 @@ export class PlayerView extends ItemView {
 				void this.refreshLibrary();
 				this.setStatus(`${this.library.length} file(s) in the folder.`);
 			},
-		}).open();
+		}));
 	}
 
 	private renderSongName(): void {
@@ -973,7 +986,7 @@ export class PlayerView extends ItemView {
 	private promptLoopEdge(which: "a" | "b"): void {
 		const { loopA, loopB } = this.engine.transport;
 		const current = (which === "a" ? loopA : loopB) ?? this.engine.position();
-		new TimeModal(this.app, {
+		this.present(new TimeModal(this.app, {
 			title: which === "a" ? "Loop start" : "Loop end",
 			value: current,
 			max: this.duration,
@@ -985,7 +998,7 @@ export class PlayerView extends ItemView {
 				this.syncLoopUi();
 				this.dirty = true;
 			},
-		}).open();
+		}));
 	}
 
 	/**
@@ -1018,7 +1031,7 @@ export class PlayerView extends ItemView {
 	private renameMark(index: number): void {
 		const mark = this.ledger.marks[index];
 		if (!mark) return;
-		new TimeModal(this.app, {
+		this.present(new TimeModal(this.app, {
 			title: "Mark",
 			value: mark.time,
 			max: this.duration,
@@ -1044,7 +1057,7 @@ export class PlayerView extends ItemView {
 				this.renderMarks();
 				this.queueSave();
 			},
-		}).open();
+		}));
 	}
 
 	// ------------------------------------------------------------------ actions
@@ -1138,14 +1151,14 @@ export class PlayerView extends ItemView {
 			// with no explanation. `media_start` / `media_end` are read from the note already;
 			// nothing in the vault sets them yet.
 			if (song.bytesHeld > HEAVY_BYTES) {
-				new Notice(
+				this.notify(
 					`By Ear: ${stripExtension(entry.name)} is ${formatTime(song.duration)} long and holds ` +
 						`${megabytes(song.bytesHeld)} while it is open. On an iPad, prefer a shorter file.`
 				);
 			}
 		} catch (error) {
 			const why = message(error);
-			new Notice(`By Ear could not open that file: ${why}`);
+			this.notify(`By Ear could not open that file: ${why}`);
 			this.setStatus(`Failed to open ${entry.name} — ${why}`, true);
 		}
 	}
@@ -1359,9 +1372,11 @@ export class PlayerView extends ItemView {
 				if (document.fullscreenEnabled && el.requestFullscreen) {
 					await el.requestFullscreen();
 					this.native = true;
+					this.wantNative = true;
 				}
-			} else if (document.fullscreenElement) {
-				await document.exitFullscreen();
+			} else {
+				this.wantNative = false;
+				if (document.fullscreenElement) await document.exitFullscreen();
 				this.native = false;
 			}
 		} catch {
@@ -1373,10 +1388,66 @@ export class PlayerView extends ItemView {
 	/** Puts the element back exactly where Obsidian left it. */
 	private restoreFromBody(): void {
 		this.contentEl.removeClass("is-immersive");
+		// A dialogue hosted inside the player (see `present`) goes back to where Obsidian keeps
+		// them, or it would leave with the player and sit clipped inside a pane.
+		for (const dialog of Array.from(this.contentEl.querySelectorAll(":scope > .modal-container"))) {
+			document.body.appendChild(dialog);
+		}
 		const home = this.home;
 		this.home = null;
 		if (!home?.parent) return;
 		home.parent.insertBefore(this.contentEl, home.next);
+	}
+
+	/**
+	 * Opens a dialogue so that it can be seen in full screen.
+	 *
+	 * ⚠️ Native full screen draws **only** the full-screen element and what is inside it. Obsidian
+	 * puts every modal on `document.body`, outside the player -- so on a Mac or an iPad in full
+	 * screen, renaming a mark, typing a loop edge and choosing a song all opened a dialogue nobody
+	 * could see, and the player looked as if it had stopped listening. z-index cannot help: it is a
+	 * different layer, not a lower one. So in full screen the dialogue moves inside the player.
+	 */
+	private present(modal: Modal): void {
+		const closed = modal.onClose.bind(modal);
+		modal.onClose = () => {
+			closed();
+			this.dialogs = Math.max(0, this.dialogs - 1);
+			this.resumeNative();
+		};
+		this.dialogs++;
+		modal.open();
+		if (this.immersive) this.contentEl.appendChild(modal.containerEl);
+	}
+
+	/**
+	 * Whether losing native full screen right now was forced rather than chosen.
+	 *
+	 * ⚠️ On an iPad, WebKit ends element full screen the moment a text field takes focus
+	 * (webkit.org bug 185617) -- an anti-phishing rule, and not something a page can opt out of. So
+	 * typing a mark's name, or a finding in the Notes tab, threw the whole player out of full screen
+	 * and back into its pane mid-sentence. When a dialogue is open or a field has focus, the overlay
+	 * stays: it still covers the screen, minus the status bar.
+	 */
+	private holdOverlay(): boolean {
+		if (this.dialogs > 0) return true;
+		const active = document.activeElement as HTMLElement | null;
+		if (!active || !this.contentEl.contains(active)) return false;
+		const typing =
+			active.tagName === "TEXTAREA" ||
+			active.isContentEditable ||
+			(active.tagName === "INPUT" && (active as HTMLInputElement).type !== "range");
+		return typing;
+	}
+
+	/** Takes native full screen back once nothing needs the keyboard. Quietly refused without a gesture. */
+	private resumeNative(): void {
+		if (!this.immersive || this.native || !this.wantNative || this.holdOverlay()) return;
+		if (!document.fullscreenEnabled || document.fullscreenElement) return;
+		this.contentEl.requestFullscreen().then(
+			() => (this.native = true),
+			() => undefined
+		);
 	}
 
 	/**
@@ -1605,6 +1676,8 @@ export class PlayerView extends ItemView {
 
 	private async revealLedger(): Promise<void> {
 		if (!this.note) return;
+		// The note opens in a tab, and a tab cannot be seen past a full-screen player.
+		if (this.immersive) await this.toggleImmersive();
 		const file = this.note.file;
 		const content = await this.app.vault.read(file);
 		const at = content.indexOf(LEDGER_MARKER);
@@ -1647,7 +1720,7 @@ export class PlayerView extends ItemView {
 			this.renderSaveState(`saved ${time} → ${this.note.file.basename}`, false);
 		} catch (error) {
 			this.renderSaveState("could not save", true);
-			new Notice(`By Ear could not write the note: ${message(error)}`);
+			this.notify(`By Ear could not write the note: ${message(error)}`);
 		}
 	}
 
@@ -1675,6 +1748,9 @@ export class PlayerView extends ItemView {
 
 	private onKeyDown = (event: KeyboardEvent): void => {
 		const target = event.target as HTMLElement | null;
+		// A dialogue hosted inside the player in full screen (see `present`) owns its own keys:
+		// Space on its Set button must press Set, not start the song, and Esc must close it.
+		if (target?.closest(".modal-container")) return;
 
 		// Before every focus guard below: the moment he most wants to save is while typing in the
 		// findings box, and that is exactly the case the guards bail out of.
@@ -1888,6 +1964,15 @@ export class PlayerView extends ItemView {
 	 * and then getting out of the way, while `Sound only` has to stay until the next song, because
 	 * it answers a question the user has not thought to ask yet.
 	 */
+	/**
+	 * A notice that can be seen in full screen. Obsidian's notices live on `document.body`, which
+	 * native full screen does not draw, so there the player's own status line says it instead.
+	 */
+	private notify(text: string): void {
+		if (this.immersive) this.setStatus(text);
+		else new Notice(text);
+	}
+
 	private setStatus(text: string, sticky = false): void {
 		const el = this.el.report;
 		if (!el) return;
